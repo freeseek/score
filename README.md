@@ -213,6 +213,13 @@ Install basic tools (Debian/Ubuntu specific if you have admin privileges)
 sudo apt install wget libcurl4 bcftools r-cran-optparse r-cran-ggplot2 r-cran-data.table
 ```
 
+Preparation steps
+```
+mkdir -p $HOME/bin $HOME/GRCh3[78] && cd /tmp
+```
+
+We recommend compiling the source code but, wherever this is not possible, Linux x86_64 pre-compiled binaries are available for download [here](http://software.broadinstitute.org/software/score). However, notice that you will require BCFtools version 1.14 or newer
+
 Download latest version of [HTSlib](https://github.com/samtools/htslib) and [BCFtools](https://github.com/samtools/bcftools) (if not downloaded already)
 ```
 wget https://github.com/samtools/bcftools/releases/download/1.16/bcftools-1.16.tar.bz2
@@ -222,8 +229,8 @@ tar xjvf bcftools-1.16.tar.bz2
 Download and compile plugins code (make sure you are using gcc version 5 or newer)
 ```
 cd bcftools-1.16/
-/bin/rm -f plugins/{score.{c,h},{munge,liftover,metal,blupx}.c}
-wget -P plugins https://raw.githubusercontent.com/freeseek/score/master/{score,munge,liftover,blupx,metal}.c
+/bin/rm -f plugins/{score.{c,h},{munge,liftover,blupx,metal}.c}
+wget -P plugins https://raw.githubusercontent.com/freeseek/score/master/{score.{c,h},{munge,liftover,blupx,metal}.c}
 make
 /bin/cp bcftools plugins/{munge,liftover,score,metal,blupx}.so $HOME/bin/
 wget -P $HOME/bin https://personal.broadinstitute.org/giulio/score/assoc_plot.R
