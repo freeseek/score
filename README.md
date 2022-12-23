@@ -67,7 +67,7 @@ Plugin options:
        --force-samples           only warn about unknown subset samples
 
 TSV Summary Statistics Options:
-   -c, --columns <preset>        column headers from preset (PLINK/PLINK2/REGENIE/SAIGE/METAL/PGS/SSF)
+   -c, --columns <preset>        column headers from preset (PLINK/PLINK2/REGENIE/SAIGE/BOLT/METAL/PGS/SSF)
    -C, --columns-file <file>     column headers from tab-delimited file
        --use-variant-id          use variant_id to match variants rather than chromosome and base_pair_location
 
@@ -82,7 +82,7 @@ Munge summary statistics tool:
 ```
 Usage: bcftools +munge [options] <score.gwas.ssf.tsv>
 Plugin options:
-   -c, --columns <preset>          column headers from preset (PLINK/PLINK2/REGENIE/SAIGE/METAL/PGS/SSF)
+   -c, --columns <preset>          column headers from preset (PLINK/PLINK2/REGENIE/SAIGE/BOLT/METAL/PGS/SSF)
    -C, --columns-file <file>       column headers from tab-delimited file
    -f, --fasta-ref <file>          reference sequence in fasta format
        --fai <file>                reference sequence .fai index
@@ -570,34 +570,59 @@ The BCFtools liftover plugin is inspired by the Picard [LiftoverVcf](https://gat
 
 At the time of this writing the BCFtools liftover plugin is the only liftover tool that handles indels at short tandem repeats correctly even in the case the two reference genomes represent different alleles as well as SNPs that fall within 1bp gaps between contiguous blocks from the same chain. When applied it to variants from the 1000 Genomes project phase 3 (GRCh37 sites file available [here](http://ftp.1000genomes.ebi.ac.uk/vol1/ftp/release/20130502/)), the BCFtools liftover plugin and Picard LiftoverVcf (run with option `--LIFTOVER_MIN_MATCH 0.0` and `--RECOVER_SWAPPED_REF_ALT true`) have the following statistics
 
-|                    | Feature   | SNP        | INDEL     | SNP,INDEL | MNP |
+| Tool               | Feature   | SNP        | INDEL     | SNP,INDEL | MNP |
 |--------------------|-----------|------------|-----------|-----------|-----|
-| Tool               | Total     | 81,377,202 | 3,299,133 | 65,871    | 123 |
-|--------------------|-----------|------------|-----------|-----------|-----|
+|                    | Total     | 81,377,202 | 3,299,133 | 65,871    | 123 |
+|                    |           |            |           |           |     |
 |                    | Rejected  | 24,130     | 1,113     | 34        | 0   |
 | BCFtools +liftover | Ref added | 162        | 2,289     | 96        | 0   |
 |                    | Swapped   | 36,967     | 5,904     | 123       | 2   |
-|--------------------|-----------|------------|-----------|-----------|-----|
+|                    |           |            |           |           |     |
 |                    | Rejected  | 29,472     | 4,890     | 144       | 2   |
 | Picard LiftoverVcf | Incorect  | 0          | 4,360     | 118       | 10  |
 |                    | Swapped   | 31,787     | 0         | 0         | 0   |
 
 To be able to swap reference and alternate alleles for indels when needed, the BCFtools liftover plugin uses the source reference to first extend all the alleles until they have a unique representation that makes it mathematically impossible to match the wrong allele after liftover to the destination reference. To further recover more indels, if one edge of the sequence being lifted over falls within any of the contiguous blocks from one of the chains but not the other end, the BCFtools liftover plugin will further extend the sequence until both ends fall within contiguous blocks from the same chain
 
-It can be tested as follows
+The BCFtools liftover plugin can be tested as follows
 ```
 wget ftp://ftp.1000genomes.ebi.ac.uk/vol1/ftp/release/20130502/ALL.wgs.phase3_shapeit2_mvncall_integrated_v5c.20130502.sites.vcf.gz{,.tbi}
-bcftools +liftover --no-version -Ou ALL.wgs.phase3_shapeit2_mvncall_integrated_v5b.20130502.sites.bcf -- \
+bcftools +liftover --no-version -Ou ALL.wgs.phase3_shapeit2_mvncall_integrated_v5b.20130502.sites.vcf.gz -- \
   -s $HOME/GRCh37/human_g1k_v37.fasta \
   -f $HOME/GRCh38/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna \
   -c $HOME/GRCh38/hg19ToHg38.over.chain.gz \
   --reject ALL.wgs.phase3_shapeit2_mvncall_integrated_v5b.20130502.sites.reject.bcf \
   --reject-type b \
   --write-src | \
-bcftools sort -Ob | \
-tee ALL.wgs.phase3_shapeit2_mvncall_integrated_v5b.20130502.sites.hg38.bcf | \
+bcftools sort -Ob | tee ALL.wgs.phase3_shapeit2_mvncall_integrated_v5b.20130502.sites.hg38.bcf | \
 bcftools index --force --output ALL.wgs.phase3_shapeit2_mvncall_integrated_v5b.20130502.sites.hg38.bcf.csi
 ```
+
+These more advanced strategies are even more relevant when performing liftovers between references drawn from different samples, as the reference alleles are more likely to change across the two assemblies in these cases. A liftover between GRCh38 and T2T-CHM13v2.0 of non-singleton variants from the 1000 Genomes project high coverage (GRCh38 sites files available [here](http://http://ftp.1000genomes.ebi.ac.uk/vol1/ftp/data_collections/1000G_2504_high_coverage/working/20220422_3202_phased_SNV_INDEL_SV/)) has the following statistics
+
+| Tool               | Feature   | SNP        | (not joined) INDEL | (joined) INDEL |
+|--------------------|-----------|------------|--------------------|----------------|
+|                    | Total     | 63,993,411 | 9,459,059          | 6,711,682      |
+|                    |           |            |                    |                |
+|                    | Rejected  | 713,903    | 123,239            | 98,251         |
+| BCFtools +liftover | Ref added | 51,905     | 1,468,094          | 444,960        |
+|                    | Swapped   | 2,505,198  | 569,817            | 559,432        |
+|                    |           |            |                    |                |
+|                    | Rejected  | 765,808    | 1,168,430          | 771,147        |
+| Picard LiftoverVcf | Incorect  | 0          | 1,015,995          | 351,649        |
+|                    | Swapped   | 2,505,198  | 0                  | 0              |
+
+If your VCF has been normalized for only including bi-allelic variants, as indels tend to often be multi-allelic for the purpose of a liftover it might be useful to first join these into multi-allelic variants using `bcftools norm -m+` and then perform the liftover as follows
+```
+bcftools norm --no-version -Ou -m+ 	1kGP_high_coverage_Illumina.sites.vcf.gz | \
+bcftools +liftover --no-version -Ou -- \
+  -s $HOME/GRCh38/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna \
+  -f $HOME/hs1/hs1.fa \
+  -c $HOME/hs1/hg38-chm13v2.over.chain.gz \
+bcftools sort -Ob | tee 1kGP_high_coverage_Illumina.sites.hs1.bcf | \
+bcftools index --force --output 1kGP_high_coverage_Illumina.sites.hs1.bcf.csi
+```
+Variants can then be split back into bi-allelic with the command `bcftools norm -m-`
 
 Compute best linear unbiased predictor
 ======================================
@@ -646,7 +671,7 @@ The BCFtools metal plugin is inspired by the [METAL](http://doi.org/10.1093/bioi
 | output sorted variants           | NO      | YES             |
 | multiple phenotypes at once      | NO      | YES             |
 
-If some missing features are important to you, contact the [author](mailto:giulio.genovese@gmail.com) to discuss adding option to the BCFtools metal plugin. The latter is meant to function as a simplified version of the original METAL software allowing to perform the most common meta-analyses while inputting and outputting files in a standardized file format. It requires summary statistics to be properly formatted which can be accomplished using `bcftools +munge` and `bcftools +liftover`
+If some missing features are important to you, contact the [author](mailto:giulio.genovese@gmail.com) to discuss adding options to the BCFtools metal plugin. The latter is meant to function as a simplified version of the original METAL software allowing to perform the most common meta-analyses while inputting and outputting files in a standardized file format. It requires summary statistics to be properly formatted which can be accomplished using `bcftools +munge` and `bcftools +liftover`
 
 This is an example to compare how to use the original METAL software and the BCFtools metal plugin
 ```
@@ -772,7 +797,10 @@ wget -O- ftp://ftp.ensembl.org/pub/current_gff3/homo_sapiens/Homo_sapiens.GRCh38
 
 If you want to annotate the coding variants, you can do so with a simple command
 ```
-bcftools csq -Ob -f $HOME/GRCh38/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna -g $HOME/GRCh38/Homo_sapiens.GRCh38.108.gff3.gz -B 1 -c CSQ -l -n 64 -s - ieu-a-298.hg38.bcf | \
+bcftools csq -Ob \
+  -f $HOME/GRCh38/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna \
+  -g $HOME/GRCh38/Homo_sapiens.GRCh38.108.gff3.gz \
+  -B 1 -c CSQ -l -n 64 -s - ieu-a-298.hg38.bcf | \
 tee ieu-a-298.hg38.csq.bcf | \
 bcftools index --force --output ieu-a-298.hg38.csq.bcf.csi
 ```
@@ -802,9 +830,11 @@ bcftools index --force --output $HOME/GRCh38/GCF_000001405.39.GRCh38.bcf.csi
 
 Similarly, you can annotate rsID numbers with
 ```
-bcftools annotate --no-version -a $HOME/GRCh38/GCF_000001405.39.GRCh38.bcf -c RS -Ob ieu-a-298.hg38.bcf | \
+bcftools annotate --no-version \
+  -a $HOME/GRCh38/GCF_000001405.39.GRCh38.bcf \
+  -c RS -Ob ieu-a-298.hg38.bcf | \
 tee ieu-a-298.hg38.rsid.bcf | \
-bcftools index --force --output ieu-a-298.hg38.rsid.bcf
+bcftools index --force --output ieu-a-298.hg38.rsid.bcf.csi
 ```
 
 Plotting
@@ -821,7 +851,7 @@ assoc_plot.R \
 ```
 ![](GIANT_HEIGHT_YENGO_2022_GWAS_SUMMARY_STATS_ALL.png)
 
-If you you generate an annotated version of the summary statistics
+If you generate an annotated version of the summary statistics
 ```
 bcftools csq -Ob -f $HOME/GRCh38/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna -g $HOME/GRCh38/Homo_sapiens.GRCh38.108.gff3.gz -B 1 -c CSQ -l -n 64 -s - GIANT_HEIGHT_YENGO_2022_GWAS_SUMMARY_STATS_ALL.hg38.bcf | \
 tee GIANT_HEIGHT_YENGO_2022_GWAS_SUMMARY_STATS_ALL.hg38.csq.bcf | \
