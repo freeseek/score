@@ -1,6 +1,6 @@
 /* The MIT License
 
-   Copyright (C) 2022 Giulio Genovese
+   Copyright (C) 2022-2023 Giulio Genovese
 
    Author: Giulio Genovese <giulio.genovese@gmail.com>
 
@@ -302,7 +302,7 @@ int tsv_read_float_and_minus_log10(tsv_t *tsv, bcf1_t *rec, void *usr) {
         else
             return -1;
     } else {
-        *single = -log10f(*single);
+        *single = 0.0 - log10f(*single);
         if (ptr != tsv->se) {
             float exponent = strtof(ptr + 1, &endptr);
             if (endptr != tsv->se) return -1;

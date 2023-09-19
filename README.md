@@ -1,7 +1,7 @@
 score
 =====
 
-A set of tools to handle and convert summary statistics files following the [GWAS-VCF specification](https://github.com/MRCIEU/gwas-vcf-specification). If you use any of these tools in your publication, please cite this website. For any feedback or questions, contact the [author](mailto:giulio.genovese@gmail.com)
+A set of tools to work with summary statistics files following the [GWAS-VCF specification](https://github.com/MRCIEU/gwas-vcf-specification). If you use any of these tools in your publication, please cite this website. For any feedback or questions, contact the [author](mailto:giulio.genovese@gmail.com)
 
 We encourage users to adopt the GWAS-VCF specification rather than the [GWAS-SSF specification](https://ebispot.github.io/gwas-blog/new-standard-for-gwas-summary-statistics) promoted by the [GWAS catalog](https://www.ebi.ac.uk/gwas/) as the latter is affected by [issues](https://github.com/EBISPOT/gwas-summary-statistics-standard/issues/4) and furthermore we believe that many common uses are better addressed by using the more general VCF specification. If you are planning to publish your summary statistics, we encourage you to submit them as GWAS-VCF files or as both GWAS-VCF and as GWAS-SSF files. The latter can be generated from the former with the following command
 ```
@@ -13,14 +13,17 @@ bcftools query -s SM -f "%CHROM\t%POS\t%ALT\t%REF[\t%ES\t%SE\t%AF\t%LP]\n" gwas-
 <!--ts-->
    * [Usage](#usage)
    * [Installation](#installation)
-   * [Column Headers Mappings](#column-headers-mappings)
-   * [LDGM-VCF Specification](#ldgm-vcf-specification)
-   * [LDGM Matrices](#ldgm-matrices)
-   * [Compute polygenic scores](#compute-polygenic-scores)
+      * [CHOLMOD](#cholmod)
+      * [Intel MKL](#intel-mkl)
+      * [Column Headers Mappings](#column-headers-mappings)
+      * [LDGM-VCF Specification](#ldgm-vcf-specification)
+      * [LDGM Matrices](#ldgm-matrices)
    * [Convert summary statistics](#convert-summary-statistics)
    * [Liftover VCFs](#liftover-vcfs)
-   * [Compute best linear unbiased predictor](#compute-best-linear-unbiased-predictor)
    * [Run meta-analysis](#run-meta-analysis)
+   * [Compute polygenic score loadings](#compute-polygenic-score-loadings)
+     * [Compute best linear unbiased predictor](#compute-best-linear-unbiased-predictor)
+   * [Compute polygenic scores](#compute-polygenic-scores)
    * [Annotation](#annotation)
    * [Plotting](#plotting)
    * [Examples](#examples)
@@ -28,15 +31,18 @@ bcftools query -s SM -f "%CHROM\t%POS\t%ALT\t%REF[\t%ES\t%SE\t%AF\t%LP]\n" gwas-
       * [Anxiety Disorder](#anxiety-disorder)
       * [Autism Spectrum Disorder](#autism-spectrum-disorder)
       * [Bipolar Disorder](#bipolar-disorder)
-      * [Eating Disorders](#eating-disorders)
+      * [Anorexia Nervosa](#anorexia-nervosa)
       * [Major Depressive Disorder](#major-depressive-disorder)
-      * [OCD & Tourette Syndrome](#ocd--tourette-syndrome)
+      * [Tourette Syndrome](#tourette-syndrome)
       * [Post Traumatic Stress Disorder](#post-traumatic-stress-disorder)
       * [Schizophrenia](#schizophrenia)
+      * [Suicide](#suicide)
       * [Educational Attainment](#educational-attainment)
+      * [Intelligence](#intelligence)
       * [Height](#height)
       * [BMI](#bmi)
       * [Smoking](#smoking)
+      * [Alzheimer](#alzheimer)
    * [Acknowledgements](#acknowledgements)
 <!--te-->
 
@@ -88,6 +94,7 @@ Plugin options:
        --fai <file>                reference sequence .fai index
        --set-cache-size <int>      select fasta cache size in bytes
        --iffy-tag <string>         FILTER annotation tag to record whether reference allele could not be determined [IFFY]
+       --mismatch-tag <string>     FILTER annotation tag to record whether reference does not match any allele [REF_MISMATCH]
    -s, --sample-name <string>      sample name for the phenotype [SAMPLE]
        --ns <float>                number of samples
        --nc <float>                number of cases
@@ -114,25 +121,26 @@ Plugin options:
        --set-cache-size <int>      select fasta cache size in bytes
    -c, --chain <file>              UCSC liftOver chain file
        --max-snp-gap <int>         maximum distance to merge contiguous blocks separated by same distance [1]
-       --max-indel-gap <int>       maximum distance between contiguous blocks to pad alleles [20]
-       --indel-win <int>           maximum distance between two edges of an indel to accept liftover [250]
+       --max-indel-inc <int>       maximum distance used to increase the size an indel during liftover [250]
        --lift-mt                   force liftover of MT/chrMT [automatically determined from contig lengths]
-       --no-left-align             do not attempt to left align indels after liftover
        --print-blocks <file>       output contiguous blocks used for the liftOver
+       --no-left-align             do not attempt to left align indels after liftover
        --reject <file>             output variants that cannot be lifted over
    -O, --reject-type u|b|v|z[0-9]  u/b: un/compressed BCF, v/z: un/compressed VCF, 0-9: compression level [v]
-       --write-source              write the source contig/position/alleles for lifted variants
+       --write-src                 write the source contig/position/alleles for lifted variants
+       --write-fail                write whether the 5' and 3' anchors have failed to lift
+       --write-ref                 write the destination reference sequence after liftover
 
 Options for how to update INFO/FORMAT records:
        --flip-tag <string>         INFO annotation flag to record whether alleles are flipped [FLIP]
        --swap-tag <string>         INFO annotation to record when alleles are swapped [SWAP]
-       --tags-to-drop <list>       INFO and FORMAT tags to drop when alleles are swapped [INFO/AC,FMT/AC]
-       --tags-to-reverse <list>    INFO and FORMAT tags to be reversed when alleles are swapped (must be Number=A,Type=Float)
-                                   [INFO/AF:1,FMT/AF:1,FMT/DS:2,FMT/AP1:1,FMT/AP2:1]
-       --tags-to-flip <list>       INFO and FORMAT tags that have the sign flipped when alleles are swapped (must be Number=A)
-                                   [FMT/EZ,FMT/ES,FMT/ED]
-       --tags-genotype <list>      INFO and FORMAT tags with genotype integers like FORMAT/GT (must be Type=Integer)
-                                   [INFO/ALLELE_A,INFO/ALLELE_B]
+       --fix-tags                  fix Number type for INFO/AC, INFO/AF, FORMAT/GP, and FORMAT/DS tags
+       --drop-tags <list>          tags to drop when alleles are swapped [.]
+       --ac-tags <list>            AC-like tags (must be Number=A,Type=Integer/Float) [INFO/AC,FMT/AC]
+       --af-tags <list>            AF-like tags (must be Number=A,Type=Float) [INFO/AF,FMT/AF,FMT/AP1,FMT/AP2]
+       --ds-tags <list>            DS-like tags (must be Number=A,Type=Float) [FMT/DS]
+       --gt-tags <list>            tags with integers like FORMAT/GT (must be Type=Integer) [INFO/ALLELE_A,INFO/ALLELE_B]
+       --es-tags <list>            GWAS-VCF tags (must be Number=A) [FMT/EZ,FMT/ES,FMT/ED]
 
 Examples:
       bcftools +liftover -Ob -o output.hg38.bcf input.hg19.bcf -- \
@@ -140,41 +148,10 @@ Examples:
       bcftools +liftover -Oz -o chm13v2.0_dbSNPv155.vcf.gz GRCh38_dbSNPv155.vcf.gz -- \
         -s Homo_sapiens_assembly38.fasta -f chm13v2.0.fa -c hg38-chm13v2.over.chain.gz
 
-To obtain UCSC liftOver chain files:
+To obtain liftover chain files:
       wget http://hgdownload.cse.ucsc.edu/goldenpath/hg19/liftOver/hg19ToHg38.over.chain.gz
+      wget http://ftp.ensembl.org/pub/assembly_mapping/homo_sapiens/GRCh37_to_GRCh38.chain.gz
       wget http://hgdownload.cse.ucsc.edu/goldenPath/hs1/liftOver/hg38-chm13v2.over.chain.gz
-```
-
-Best linear unbiased prediction tool:
-```
-Usage: bcftools +blupx [options] <score.gwas.vcf.gz> [<ldgm.vcf.gz> <ldgm2.vcf.gz> ...]
-Plugin options:
-   -b, --beta-cov                  frequency-dependent architecture parameter [1e-7]
-   -x, --cross-corr                cross ancestry correlation parameter [0.9]
-   -a, --alpha-param               alpha parameter [0]
-       --tolerance <float>         Tolerance threshold for the conjugate gradient [1e-10]
-       --no-jacobi                 Do not use Jacobi preconditioning when solving linear systems with conjugate gradient
-       --sample-sizes <list>       List of sample sizes for each input summary statistic [estimated from NS/NC/NE fields]
-       --ldgm-vcfs <list>          List of LDGM-VCF files to use
-       --ldgm-vcfs-file <file>     File of list of LDGM-VCF files to use
-   -e, --exclude EXPR              Exclude sites for which the expression is true (see man page for details)
-   -i, --include EXPR              Select sites for which the expression is true (see man page for details)
-       --no-version                do not append version and command line to the header
-   -o, --output <file>             write output to a file [no output]
-   -O, --output-type u|b|v|z[0-9]  u/b: un/compressed BCF, v/z: un/compressed VCF, 0-9: compression level [v]
-   -l, --log <file>                write log to file [standard error]
-   -r, --regions <region>          restrict to comma-separated list of regions
-   -R, --regions-file <file>       restrict to regions listed in a file
-       --regions-overlap 0|1|2     Include if POS in the region (0), record overlaps (1), variant overlaps (2) [1]
-   -s, --samples <list>            List of summary statitics to include
-   -S, --samples-file <file>       File of list of summary statistics to include
-   -t, --targets [^]<region>       restrict to comma-separated list of regions. Exclude regions with "^" prefix
-   -T, --targets-file [^]<file>    restrict to regions listed in a file. Exclude regions with "^" prefix
-       --targets-overlap 0|1|2     Include if POS in the region (0), record overlaps (1), variant overlaps (2) [0]
-       --threads <int>             use multithreading with INT worker threads [0]
-
-Examples:
-      bcftools +blupx -Ob -o ukb.blup.gwas.bcf -b 2e-7 ukb.gwas.bcf 1kg_ldgm.EUR.bcf
 ```
 
 Meta-analysis tool:
@@ -205,36 +182,141 @@ Examples:
       bcftools +metal -Ob -o ukb_mvp.gwas.bcf -i 'ID="rs1234" || ID="rs123456" || ID="rs123"' ukb.gwas.bcf mvp.gwas.bcf
 ```
 
+Compute polygenic score loadings tool:
+```
+Usage: bcftools +pgs [options] <score.gwas.vcf.gz> [<ldgm.vcf.gz> <ldgm2.vcf.gz> ...]
+Plugin options:
+   -v, --verbose                   verbose output (specify twice to increase verbosity)
+       --debug                     output matrix and vectors for one LD block to files in the current directory
+       --ldgm-vcfs <list>          List of LDGM-VCF files to use
+       --ldgm-vcfs-file <file>     File of list of LDGM-VCF files to use
+   -e, --exclude EXPR              Exclude sites for which the expression is true (see man page for details)
+   -i, --include EXPR              Select sites for which the expression is true (see man page for details)
+       --no-version                do not append version and command line to the header
+   -o, --output <file>             write output to a file [no output]
+   -O, --output-type u|b|v|z[0-9]  u/b: un/compressed BCF, v/z: un/compressed VCF, 0-9: compression level [v]
+   -l, --log <file>                write log to file [standard error]
+   -r, --regions <region>          restrict to comma-separated list of regions
+   -R, --regions-file <file>       restrict to regions listed in a file
+       --regions-overlap 0|1|2     Include if POS in the region (0), record overlaps (1), variant overlaps (2) [1]
+   -s, --samples <list>            List of summary statitics to include
+   -S, --samples-file <file>       File of list of summary statistics to include
+   -t, --targets [^]<region>       restrict to comma-separated list of regions. Exclude regions with "^" prefix
+   -T, --targets-file [^]<file>    restrict to regions listed in a file. Exclude regions with "^" prefix
+       --targets-overlap 0|1|2     Include if POS in the region (0), record overlaps (1), variant overlaps (2) [0]
+       --threads <int>             use multithreading with INT worker threads [0]
+
+Model options:
+       --stats-only                only compute suggested summary options for a given alpha parameter
+       --seed <int>                seed number for the pseudo-random generator [time(NULL)]
+       --average-ld-score <float>  average LD score per marker [72.6]
+       --expected-ratio <float>    expected ratio for sigmasqInf correction factor [0.6]
+   -a, --alpha-param <float>       alpha parameter [-0.5]
+   -b, --beta-cov <float>          frequency-dependent architecture parameter [1e-7]
+       --herit-per-marker <float>  heritability per marker for sparse model [1e-7]
+   -x, --cross-corr <float>        cross ancestry correlation parameter [0.9]
+       --sample-sizes <list>       List of sample sizes for each input summary statistic [estimated from NS/NC/NE fields]
+       --max-alpha-hat2 <float>    maximum summary statistics squared marginal effect [0.002]
+       --sigmasq-values <list>     sigma square grid values to try [estimated from max-alpha-hat2]
+       --sigmasq-weights <list>    sigma square weights values to try [estimated from herit-per-marker]
+       --gibbs-iter <int>          number of iterations for the Gibbs sampler [10]
+       --gibbs-burn-in <int>       number of burn-in iterations for the Gibbs sampler [2]
+       --record-weights            whether to record the Gibbs weight
+
+Linear algebra options:
+       --tolerance <float>         Tolerance threshold for the conjugate gradient [1e-10]
+       --no-jacobi                 Do not use Jacobi preconditioning when solving linear systems with conjugate gradient
+       --factorization <int>       CHOLMOD factorization strategy (0=simplicial, 1=automatic, 2=supernodal) [1]
+       --supernodal-switch <int>   CHOLMOD supernodal switch [40]
+       --ordering <int>            CHOLMOD ordering method (-1 for AMD, -2 for METIS, -3 for NESDIS) [0]
+       --chunk-size <float>        OPENMP chunk size for computing the number of threads to use [128000]
+
+Examples:
+      bcftools +pgs --stats-only ukb.gwas.bcf 1kg_ldgm.EUR.bcf
+      bcftools +pgs -Ob -o ukb.pgs.bcf -b 5e-8 ukb.gwas.bcf 1kg_ldgm.EUR.bcf
+      bcftools +pgs -Oz -o giant.pgs.vcf.gz giant.gwas.vcf.gz 1kg_ldgm.{AFR,EAS,EUR,AMR,SAS}.bcf
+```
+
+Compute best linear unbiased predictor tool:
+```
+Usage: bcftools +blup [options] <score.gwas.vcf.gz> [<ldgm.vcf.gz> <ldgm2.vcf.gz> ...]
+Plugin options:
+   -v, --verbose                   verbose output
+       --ldgm-vcfs <list>          List of LDGM-VCF files to use
+       --ldgm-vcfs-file <file>     File of list of LDGM-VCF files to use
+   -e, --exclude EXPR              Exclude sites for which the expression is true (see man page for details)
+   -i, --include EXPR              Select sites for which the expression is true (see man page for details)
+       --no-version                do not append version and command line to the header
+   -o, --output <file>             write output to a file [no output]
+   -O, --output-type u|b|v|z[0-9]  u/b: un/compressed BCF, v/z: un/compressed VCF, 0-9: compression level [v]
+   -l, --log <file>                write log to file [standard error]
+   -r, --regions <region>          restrict to comma-separated list of regions
+   -R, --regions-file <file>       restrict to regions listed in a file
+       --regions-overlap 0|1|2     Include if POS in the region (0), record overlaps (1), variant overlaps (2) [1]
+   -s, --samples <list>            List of summary statitics to include
+   -S, --samples-file <file>       File of list of summary statistics to include
+   -t, --targets [^]<region>       restrict to comma-separated list of regions. Exclude regions with "^" prefix
+   -T, --targets-file [^]<file>    restrict to regions listed in a file. Exclude regions with "^" prefix
+       --targets-overlap 0|1|2     Include if POS in the region (0), record overlaps (1), variant overlaps (2) [0]
+       --threads <int>             use multithreading with INT worker threads [0]
+
+Model options:
+       --stats-only                only compute suggested summary options for a given alpha parameter
+       --average-ld-score <float>  average LD score per marker [72.6]
+   -a, --alpha-param <float>       alpha parameter [-0.5]
+   -b, --beta-cov <float>          frequency-dependent architecture parameter [1e-7]
+   -x, --cross-corr <float>        cross ancestry correlation parameter [0.9]
+       --sample-sizes <list>       List of sample sizes for each input summary statistic [estimated from NS/NC/NE fields]
+
+Linear algebra options:
+       --tolerance <float>         Tolerance threshold for the conjugate gradient [1e-6]
+       --no-jacobi                 Do not use Jacobi preconditioning when solving linear systems with conjugate gradient
+
+Examples:
+      bcftools +blup -Ob -o ukb.blup.bcf -b 2e-7 ukb.gwas.bcf 1kg_ldgm.EUR.bcf
+```
+
 Installation
 ============
 
-Install basic tools (Debian/Ubuntu specific if you have admin privileges)
+Install basic tools including CHOLMOD (Debian/Ubuntu specific if you have admin privileges)
 ```
-sudo apt install wget libcurl4 bcftools r-cran-optparse r-cran-ggplot2 r-cran-data.table
+sudo apt install wget libcurl4 bcftools libopenblas0-openmp libcholmod4 libsuitesparse-dev r-cran-optparse r-cran-ggplot2 r-cran-data.table
+if [ ! -f /usr/include/cholmod.h ]; then
+  sed 's/^#include "cholmod_/#include "suitesparse\/cholmod_/;s/^#include "SuiteSparse_/#include "suitesparse\/SuiteSparse_/' \
+    /usr/include/suitesparse/cholmod.h | sudo tee /usr/include/cholmod.h
+fi
 ```
+See section [CHOLMOD](#cholmod) for how to install CHOLMOD on other computational environments
 
 Preparation steps
 ```
-mkdir -p $HOME/bin $HOME/GRCh3[78] && cd /tmp
+mkdir -p $HOME/bin $HOME/GRCh3{7,8} && cd /tmp
 ```
 
 We recommend compiling the source code but, wherever this is not possible, Linux x86_64 pre-compiled binaries are available for download [here](http://software.broadinstitute.org/software/score). However, notice that you will require BCFtools version 1.14 or newer
 
 Download latest version of [HTSlib](https://github.com/samtools/htslib) and [BCFtools](https://github.com/samtools/bcftools) (if not downloaded already)
 ```
-wget https://github.com/samtools/bcftools/releases/download/1.16/bcftools-1.16.tar.bz2
-tar xjvf bcftools-1.16.tar.bz2
+wget https://github.com/samtools/bcftools/releases/download/1.18/bcftools-1.18.tar.bz2
+tar xjvf bcftools-1.18.tar.bz2
 ```
 
 Download and compile plugins code (make sure you are using gcc version 5 or newer)
 ```
-cd bcftools-1.16/
-/bin/rm -f plugins/{score.{c,h},{munge,liftover,blupx,metal}.c}
-wget -P plugins https://raw.githubusercontent.com/freeseek/score/master/{score.{c,h},{munge,liftover,blupx,metal}.c}
+cd bcftools-1.18/
+/bin/rm -f plugins/{score.{c,h},{munge,liftover,metal,blup}.c,pgs.{c,mk}}
+# wget -P plugins https://raw.githubusercontent.com/freeseek/score/master/{score.{c,h},{munge,liftover,metal,blup}.c,pgs.{c,mk}}
+# for now use this instead:
+wget http://software.broadinstitute.org/software/score/score_1.17-dev.tar.gz && tar xzvf score_1.17-dev.tar.gz -C plugins/
 make
-/bin/cp bcftools plugins/{munge,liftover,score,metal,blupx}.so $HOME/bin/
-wget -P $HOME/bin https://personal.broadinstitute.org/giulio/score/assoc_plot.R
+/bin/cp bcftools plugins/{munge,liftover,score,metal,pgs,blup}.so $HOME/bin/
+wget -P $HOME/bin https://raw.githubusercontent.com/freeseek/score/master/assoc_plot.R
 chmod a+x $HOME/bin/assoc_plot.R
+```
+As the `pgs` plugin requires SuiteSparse headers and CHOLMOD binaries to be compiled, if you don't need it you can remove it with
+```
+/bin/rm plugins/pgs.{c,mk}
 ```
 
 Make sure the directory with the plugins is available to BCFtools
@@ -266,14 +348,92 @@ wget -P $HOME/GRCh38 http://hgdownload.cse.ucsc.edu/goldenpath/hg19/liftOver/hg1
 ref="$HOME/GRCh38/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna"
 ```
 
-Column Headers Mappings
-=======================
+CHOLMOD
+-------
 
-Generate column headers mappings from the [MungeSumstats](https://doi.org/10.1093/bioinformatics/btab665) Bioconductor package for importing summary statistics
+To run the BCFtools pgs plugin that computes polygenic score loadings you will need a working copy of the CHOLMOD library version 4 or newer. To install CHOLMOD on older systems can be tricky. An alternative is to install and run the BCFtools pgs plugin directly on your own machine, which might make the installation easier. Furthermore, as CHOLMOD uses [OpenMP](https://www.openmp.org/) for multithreading and [BLAS](https://netlib.org/blas) and [LAPACK](https://netlib.org/lapack) for dense linear algebra routines in the supernodal Cholesky factorization, you have to make sure you are using an OpenMP version of the BLAS library or else multi-threading will [perform poorly](https://github.com/DrTimothyAldenDavis/SuiteSparse/issues/1)
+
+To compile the BCFtools pgs plugin you will additionally need access to the CHOLMOD header file `cholmod.h` and access to binaries for the CHOLMOD library. If you install binaries and libraries using `conda`, you can install the [openblas](https://anaconda.org/conda-forge/openblas) and [suitesparse](https://anaconda.org/conda-forge/suitesparse) packages  by running:
+```
+conda install bcftools 'libopenblas=*=*openmp*' suitesparse
+```
+
+Alternatively, on a Debian/Ubuntu machine CHOLMOD header file `cholmod.h` is available in [libsuitesparse-dev](https://packages.debian.org/search?keywords=libsuitesparse-dev) and CHOLMOD binaries are available in [libcholmod4](https://packages.debian.org/search?keywords=libcholmod4). It should be enough to run:
+```
+sudo apt install bcftools libopenblas0-openmp libcholmod4 libsuitesparse-dev
+sudo apt remove libopenblas0-pthread
+sudo ln -s suitesparse/cholmod.h /usr/include/cholmod.h
+sudo ln -s suitesparse/SuiteSparse_config.h /usr/include/SuiteSparse_config.h
+```
+Notice that you need to make sure you have installed package [libopenblas0-openmp](https://packages.debian.org/search?keywords=libopenblas0-openmp) rather than [libopenblas0-pthread](https://packages.debian.org/search?keywords=libopenblas0-pthread)
+
+On a CentOS/RedHat/Fedora machine CHOLMOD header file `cholmod.h` is available in [suitesparse-devel](https://www.rpmfind.net/linux/rpm2html/search.php?query=suitesparse-devel) and CHOLMOD binaries are available in [libcholmod4](https://www.rpmfind.net/linux/rpm2html/search.php?query=libcholmod4). You should be able to run:
+```
+sudo yum install bcftools libopenblas-openmp libcholmod4 suitesparse-devel
+sudo yum remove libopenblas-pthreads
+sudo ln -s suitesparse/cholmod.h /usr/include/cholmod.h
+sudo ln -s suitesparse/SuiteSparse_config.h /usr/include/SuiteSparse_config.h
+```
+Notice that you need to make sure you have installed package [libopenblas-openmp](https://www.rpmfind.net/linux/rpm2html/search.php?query=libopenblas-openmp) rather than [libopenblas-pthreads](https://www.rpmfind.net/linux/rpm2html/search.php?query=libopenblas-pthreads)
+
+Similarly, on a Mac machine with [Homebrew](https://brew.sh/) it would be enough to install the [openblas](https://formulae.brew.sh/formula/openblas) and [suite-sparse](https://formulae.brew.sh/formula/suite-sparse) packages by running:
+```
+brew install bcftools openblas suite-sparse
+```
+However, notice that in Homebrew OpenBLAS is compiled with `gcc` (due to the presence of Fortran code) and uses [GCC OpenMP](https://gcc.gnu.org/wiki/openmp) while SuiteSparse is compiled with `clang` which would instead use [LLVM OpenMP](https://openmp.llvm.org/). As mixing two different versions of OpenMP is not possible, the maintainers of the SuiteSparse package have opted to compile the package without OpenMP support, despite this being regarded as a [mistake](https://github.com/DrTimothyAldenDavis/SuiteSparse/issues/313#issuecomment-1519050382) by the author of SuiteSparse. Notice that if you are using one of the newer Mac machines with Apple M CPUs, then Homebrew no longer links headers and libraries into /usr/local by default so to use these libraries when you compile new binaries you will have to add headers and libraries manually with:
+```
+export CPATH=/opt/homebrew/include
+export LIBRARY_PATH=/opt/homebrew/lib
+```
+
+If instead you have to generate CHOLMOD binaries from scratch, you will have to download a [SuiteSparse](https://github.com/DrTimothyAldenDavis/SuiteSparse/releases) release and install it on your system by using the following instructions:
+```
+release=7.1.0
+wget https://github.com/DrTimothyAldenDavis/SuiteSparse/archive/refs/tags/v$release.tar.gz
+tar xzvf v$release.tar.gz
+cd SuiteSparse-$release
+sed -i '/GraphBLAS/d' Makefile
+CMAKE_OPTIONS="-DBLA_VENDOR=OpenBLAS" make # only make if you want to use Intel MKL in the place of OpenBLAS
+sudo make install
+```
+
+Intel MKL
+---------
+
+To use CHOLMOD you can simply rely on [OpenBLAS](https://www.openblas.net/). However, we noticed a speed improvement when using [Intel MKL](https://www.intel.com/content/www/us/en/developer/tools/oneapi/onemkl.html) binaries (on an Intel CPU). We advise to use Intel MKL only if you absolutely want the fastest implementation possible. Do notice that while Intel MKL is free, it is a proprietary software and it is the responsibility of users to buy or register for community (free) Intel MKL licenses for their products
+
+To install Intel MKL with conda install packages [mkl](https://anaconda.org/conda-forge/mkl) and [llvm-openmp](https://anaconda.org/conda-forge/llvm-openmp)
+```
+conda install mkl llvm-openmp
+```
+
+On a Debian/Ubuntu machine install packages [libmkl-core](https://packages.debian.org/search?keywords=libmkl-core), [libmkl-intel-lp64](https://packages.debian.org/search?keywords=libmkl-intel-lp64), [libmkl-intel-thread](https://packages.debian.org/search?keywords=libmkl-intel-thread), and [libomp5](https://packages.debian.org/search?keywords=libomp5)
+```
+sudo apt install libmkl-core libmkl-intel-lp64 libmkl-intel-thread libomp5 libmkl-avx2
+```
+You can replace [libmkl-avx2](https://packages.debian.org/search?keywords=libmkl-avx2) with one of [libmkl-mc](https://packages.debian.org/search?keywords=libmkl-mc), [libmkl-mc3](https://packages.debian.org/search?keywords=libmkl-mc3), [libmkl-avx](https://packages.debian.org/search?keywords=libmkl-avx), [libmkl-avx512](https://packages.debian.org/search?keywords=libmkl-avx512), or [libmkl-avx512-mic](https://packages.debian.org/search?keywords=libmkl-avx512-mic) depending on your CPU architecture. If in doubt, install all of them
+
+On a CentOS/RedHat/Fedora install packages [intel-mkl](https://www.intel.com/content/www/us/en/developer/articles/guide/installing-free-libraries-and-python-yum-repo.html) and [libomp](https://www.rpmfind.net/linux/rpm2html/search.php?query=libomp)
+```
+sudo yum-config-manager --add-repo https://yum.repos.intel.com/mkl/setup/intel-mkl.repo
+sudo rpm --import https://yum.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS-2019.PUB
+sudo yum install intel-mkl libomp
+```
+
+Once the required Intel MKL libraries have been installed, you can use these by running
+```
+export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libmkl_core.so:/usr/lib/x86_64-linux-gnu/libmkl_intel_lp64.so:/usr/lib/x86_64-linux-gnu/libmkl_intel_thread.so:/usr/lib/x86_64-linux-gnu/libomp5.so
+```
+before running `bcftools +pgs`
+
+Column Headers Mappings
+-----------------------
+
+Generate column headers mappings from the [MungeSumstats](https://doi.org/10.1093/bioinformatics/btab665) Bioconductor package for importing summary statistics (you will need the `Rscript` binary from conda package [r-base](https://anaconda.org/conda-forge/r-base), Debian/Ubuntu package [r-base-core](https://packages.debian.org/search?keywords=r-base-core), CentOS/RedHat/Fedora package [R-core](https://www.rpmfind.net/linux/rpm2html/search.php?query=R-core), or Homebrew package [r](https://formulae.brew.sh/formula/r))
 ```
 wget https://raw.githubusercontent.com/neurogenomics/MungeSumstats/master/data/sumstatsColHeaders.rda
-(Rscript -e 'load("sumstatsColHeaders.rda"); write.table(sumstatsColHeaders, "", quote=FALSE, sep="\t", row.names=FALSE, col.names=FALSE)' | \
-  awk -F"\t" -v OFS="\t" '
+(echo -e 'load("sumstatsColHeaders.rda"); write.table(sumstatsColHeaders, "", quote=FALSE, sep="\\t", row.names=FALSE, col.names=FALSE)' | \
+  Rscript - | awk -F"\t" -v OFS="\t" '
   ($1~"^ALT" || $1~"^EFF" || $1~"^MINOR" || $1~"^INC" || $1~"T[eE][sS][tT][eE][dD]" || $1=="EA") && $2=="A2" {$2="A1"}
   ($1~"^REF" || $1~"^NON" || $1~"^OTHER" || $1~"^MAJOR" || $1~"^DEC" || $1=="NEA") && $2=="A1" {$2="A2"}
   ($1=="A2FREQ" || $1=="A2FRQ") && $2=="FRQ" {$2="A2FRQ"}
@@ -290,6 +450,7 @@ echo -e "IMPINFO\tINFO"
 echo -e "IMPUTATION\tINFO"
 echo -e "R2HAT\tINFO"
 echo -e "RSQ\tINFO"
+echo -e "minINFO\tINFO"
 echo -e "EFFECT_WEIGHT\tBETA"
 echo -e "INV_VAR_META_BETA\tBETA"
 echo -e "ALL_INV_VAR_META_BETA\tBETA"
@@ -308,13 +469,16 @@ echo -e "NCAS\tN_CAS"
 echo -e "NCON\tN_CON"
 echo -e "Weight\tNEFF"
 echo -e "NEFFDIV2\tNEFFDIV2"
+echo -e "het_isq\tHET_I2"
 echo -e "HetISq\tHET_I2"
 echo -e "HetISqt\tHET_I2"
+echo -e "het_pvalue\tHET_P"
 echo -e "HetPVa\tHET_P"
 echo -e "HetPVal\tHET_P"
 echo -e "logHetP\tHET_LP"
 echo -e "Direction\tDIRE"
-echo -e "DIRE\tDIRE") > colheaders.tsv
+echo -e "DIRE\tDIRE"
+echo -e "EffectDirection\tDIRE") > colheaders.tsv
 /bin/rm sumstatsColHeaders.rda
 ```
 Notice that MungeSumstats assigns `A2` rather than `A1` as the effect allele, prompting a correction to revert the mapping to what the original [munge_sumstats.py](https://github.com/bulik/ldsc/blob/master/munge_sumstats.py) had
@@ -322,7 +486,7 @@ Notice that MungeSumstats assigns `A2` rather than `A1` as the effect allele, pr
 If your summary statistics file contains headers that cannot be parsed, consider [reporting the issue](https://github.com/neurogenomics/MungeSumstats#future-enhancements) to the MungeSumstats authors
 
 LDGM-VCF Specification
-======================
+----------------------
 
 Similar to the [GWAS-VCF specification](https://github.com/MRCIEU/gwas-vcf-specification), an LDGM-VCF file is a VCF file whose header must include the following mandatory INFO fields
 ```
@@ -352,7 +516,7 @@ Variants in perfect linkage disequilibrium with the same `LD_block` and `LD_node
 The `ID` field does not need to be filled as matrices from and LDGM-VCF file and summary statistics from a GWAS-VCF file will be unequivocally matched using genomic position, reference and alternate alleles
 
 LDGM Matrices
-=============
+-------------
 
 Linkage disequilibrium graphical models (LDGM) precision matrices for [1,361 intervals](https://github.com/jmacdon/LDblocks_GRCh38) computed for the GRCh38 genome can be downloaded from [here](https://ldgm.readthedocs.io/en/latest/introduction.html). However, SNP list files are provided without position information, so we need to first recover this information to be able to match the SNPs to the SNPs in a summary statistics file following the GWAS-VCF specification. You can download the LDGM-VCF precision matrices [here](http://software.broadinstitute.org/software/score)
 
@@ -460,26 +624,17 @@ bcftools query -i "LD_block=135" -f "%LD_node\t%LD_diagonal\t%LD_neighbors\t%LD_
 
 To split the LDGM-VCF file in 1,361 LDGM-VCF files containing each block separately
 ```
-wget -O- https://raw.githubusercontent.com/jmacdon/LDblocks_GRCh38/master/data/EUR_LD_blocks.bed | \
+wget -O- https://raw.githubusercontent.com/jmacdon/LDblocks_GRCh38/master/data/deCODE_EUR_LD_blocks.bed | \
   awk 'NR>1 {printf "%s:%d:%d\n",$1,$2,$3}' > EUR_LD_blocks.txt
 ulimit -n 2048
 bcftools +scatter --no-version -Ob 1kg_ldgm.EUR.bcf -o EUR -S EUR_LD_blocks.txt -o LD_blocks/ -p 1kg_ldgm.EUR.
 ```
 
-Compute polygenic scores
-========================
+Currently the LDGMs are affected by three shortcomings that should be addressed in future releases:
 
-The BCFtools score plugin can input summary statistics files in a variety of formats, including those following the [GWAS-VCF specification](https://github.com/MRCIEU/gwas-vcf-specification), those following the [GWAS-SSF specification](https://ebispot.github.io/gwas-blog/new-standard-for-gwas-summary-statistics), and more in general most summary statistics files formatted as text tables with a header indicating which column to use. For GWAS-SSF and table summary statistiscs files, BCFtools score will automatically recognize the columns and attempt to match variants by chromosome and position if available and then by marker name if the genomic position is unavailable in the summary statistics file. Multiple summary statistics files can be input at once except you cannot mix GWAS-VCF summary statistics files with other files. If multiple summary statistics are present in a GWAS-VCF, all will be scored independently
-
-One advantage of the BCFtools score plugin is that it can be readily used on imputation VCFs without further format conversion. It will work with Minimac3, Minimac4, Beagle5, and IMPUTE5 output VCFs and more in general with any VCF including any of the following format fields
-
-| FORMAT  | Description                                      |
-|---------|--------------------------------------------------|
-| AP1/AP2 | ALT allele probability of first/second haplotype |
-| HDS     | Estimated Haploid Alternate Allele Dosage        |
-| GP      | Estimated Genotype Probability                   |
-| DS      | Genotype dosage                                  |
-| GT      | Genotype                                         |
+* Variants at the edge of two consecutive LD blocks are shared by both LD blocks
+* MHC region spans multiple LD blocks (block 516, 517, 518, 519, and 520)
+* No LD blocks are assigned for chromosome X
 
 Convert summary statistics
 ==========================
@@ -509,8 +664,8 @@ bcftools +munge --no-version -c PLINK -f $HOME/GRCh37/human_g1k_v37.fasta -s ieu
 If you want to convert to a different reference genome
 ```
 zcat ieu-a-298.tsv.gz | \
-bcftools +munge --no-version -Ou -c PLINK --fai $HOME/GRCh37/human_g1k_v37.fasta.fai -s ieu-a-298 |
-bcftools +liftover --no-version -Ob -- \
+bcftools +munge --no-version -Ou -c PLINK -f $HOME/GRCh37/human_g1k_v37.fasta -s ieu-a-298 |
+bcftools +liftover --no-version -Ob -- -s $HOME/GRCh37/human_g1k_v37.fasta \
   -f $HOME/GRCh38/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna \
   -c $HOME/GRCh38/hg19ToHg38.over.chain.gz | \
 tee ieu-a-298.hg38.bcf | \
@@ -520,8 +675,8 @@ bcftools index --force --output ieu-a-298.hg38.bcf.csi
 For summary statistics files following a less specific column header format, you can use a comprehensive column headers mapping
 ```
 wget https://raw.githubusercontent.com/neurogenomics/MungeSumstats/master/inst/extdata/eduAttainOkbay.txt
-bcftools +munge --no-version -Ou -C colheaders.tsv --fai $HOME/GRCh37/human_g1k_v37.fasta.fai -s eduAttain eduAttainOkbay.txt | \
-bcftools +liftover --no-version -Ou -- \
+bcftools +munge --no-version -Ou -C colheaders.tsv -f $HOME/GRCh37/human_g1k_v37.fasta -s eduAttain eduAttainOkbay.txt | \
+bcftools +liftover --no-version -Ou -- -s $HOME/GRCh37/human_g1k_v37.fasta \
   -f $HOME/GRCh38/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna \
   -c $HOME/GRCh38/hg19ToHg38.over.chain.gz | \
 bcftools sort -Ob | \
@@ -533,8 +688,8 @@ For summary statistics files including indels, you will need to provide both ref
 ```
 wget https://storage.googleapis.com/covid19-hg-public/20201215/results/20210107/COVID19_HGI_10k_SNPs.zip
 unzip -p COVID19_HGI_10k_SNPs.zip COVID19_HGI_A2_ALL_20210107.10k.b37.txt.gz | \
-bcftools +munge --no-version -Ou -C colheaders.tsv --fai $HOME/GRCh37/human_g1k_v37.fasta.fai -s COVID_2021 | \
-bcftools +liftover --no-version -Ou -- \
+bcftools +munge --no-version -Ou -C colheaders.tsv -f $HOME/GRCh37/human_g1k_v37.fasta -s COVID_2021 | \
+bcftools +liftover --no-version -Ou -- -s $HOME/GRCh37/human_g1k_v37.fasta \
   -s $HOME/GRCh37/human_g1k_v37.fasta \
   -f $HOME/GRCh38/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna \
   -c $HOME/GRCh38/hg19ToHg38.over.chain.gz | \
@@ -546,75 +701,27 @@ bcftools index --force --output COVID19_HGI_A2_ALL_20210107.10k.hg38.bcf.csi
 Liftover VCFs
 =============
 
-The BCFtools liftover plugin is inspired by the Picard [LiftoverVcf](https://gatk.broadinstitute.org/hc/en-us/articles/360037060932-LiftoverVcf-Picard-) tool, written by Alec Wysoker, Benjamin Bimber, Tim Fennell, and Yossi Farjoun, and allows to liftover VCFs from one reference to another including summary statistics files following the [GWAS-VCF specification](https://github.com/MRCIEU/gwas-vcf-specification). Beyond being much faster than the Picard LiftoverVcf tool, the BCFtools liftover plugin supports several additional features summarized in the following table
+The BCFtools liftover plugin is inspired by the Picard [LiftoverVcf](https://gatk.broadinstitute.org/hc/en-us/articles/360037060932-LiftoverVcf-Picard-) tool, written by Alec Wysoker, Benjamin Bimber, Tim Fennell, and Yossi Farjoun, and allows to liftover VCFs from one reference to another including summary statistics files following the [GWAS-VCF specification](https://github.com/MRCIEU/gwas-vcf-specification). Other existing VCF liftover tools are [Transanno](https://github.com/informationsea/transanno), [Genozip](https://doi.org/10.1101/2022.07.17.500374), and [CrossMap](https://doi.org/10.1093/bioinformatics/btt730). Beyond being much faster than the other tools, the BCFtools liftover plugin is the most comprehensive VCF liftover tool with the ability to handle multi-allelic indels and records falling within small gaps of the chain files. To be able to swap reference and alternate alleles for indels when needed, the BCFtools liftover plugin uses the source reference to first extend all the alleles until they have a unique representation that makes it mathematically impossible to match the wrong allele after liftover to the destination reference
 
-| Feature                            | Picard LiftoverVcf | BCFtools +liftover |
-|------------------------------------|--------------------|--------------------|
-| SNPs                               | YES                | YES                |
-| indels                             | YES                | YES                |
-| left align indels after liftover   | YES                | YES                |
-| sort records after liftover        | YES                | NO                 |
-| SNPs at 1bp gaps in the chain file | NO                 | YES                |
-| flips alleles when changing strand | YES                | YES                |
-| swaps SNP alleles when needed      | YES                | YES                |
-| swaps indel alleles when needed    | NO                 | YES                |
-| adds reference alleles when needed | NO                 | YES                |
-| handles GT/PL/AD records           | bi-allelic only    | YES                |
-| handles Number=G/Number=R records  | NO                 | YES                |
-| reverses Number=A records          | only AF-like       | YES                |
-| handles EZ/ES/AF GWAS-VCF records  | NO                 | YES                |
-| flexible with contig names         | NO                 | YES                |
-| can input a VCF as a file stream   | NO                 | YES                |
-| can input and output binary VCFs   | NO                 | YES                |
-| loads whole reference in memory    | YES                | NO                 |
+There are different chain files that can be used to liftover variants between two reference genome assemblies. Some of the chain files [from UCSC](https://hgdownload.soe.ucsc.edu/downloads.html) are generated using their proprietary toolsets with [BLAT](https://en.wikipedia.org/wiki/BLAT_(bioinformatics)) alignments as explained [here](http://genomewiki.ucsc.edu/index.php/Minimal_Steps_For_LiftOver) while some are generated using the open source [nf-LO](https://github.com/evotools/nf-LO) pipeline with [minimap2](https://github.com/lh3/minimap2) alignments as explained [here](https://github.com/marbl/CHM13#liftover-resources). Free to use alternatives to the BLAT chain files are provided [from Ensembl](https://ftp.ensembl.org/pub/assembly_mapping/) but the UCSC chain files cover more base pairs than the Ensembl chain files
 
-At the time of this writing the BCFtools liftover plugin is the only liftover tool that handles indels at short tandem repeats correctly even in the case the two reference genomes represent different alleles as well as SNPs that fall within 1bp gaps between contiguous blocks from the same chain. When applied it to variants from the 1000 Genomes project phase 3 (GRCh37 sites file available [here](http://ftp.1000genomes.ebi.ac.uk/vol1/ftp/release/20130502/)), the BCFtools liftover plugin and Picard LiftoverVcf (run with option `--LIFTOVER_MIN_MATCH 0.0` and `--RECOVER_SWAPPED_REF_ALT true`) have the following statistics
-
-| Tool               | Feature   | SNP        | INDEL     | SNP,INDEL | MNP |
-|--------------------|-----------|------------|-----------|-----------|-----|
-|                    | Total     | 81,377,202 | 3,299,133 | 65,871    | 123 |
-|                    |           |            |           |           |     |
-|                    | Rejected  | 24,130     | 1,113     | 34        | 0   |
-| BCFtools +liftover | Ref added | 162        | 2,289     | 96        | 0   |
-|                    | Swapped   | 36,967     | 5,904     | 123       | 2   |
-|                    |           |            |           |           |     |
-|                    | Rejected  | 29,472     | 4,890     | 144       | 2   |
-| Picard LiftoverVcf | Incorect  | 0          | 4,360     | 118       | 10  |
-|                    | Swapped   | 31,787     | 0         | 0         | 0   |
-
-To be able to swap reference and alternate alleles for indels when needed, the BCFtools liftover plugin uses the source reference to first extend all the alleles until they have a unique representation that makes it mathematically impossible to match the wrong allele after liftover to the destination reference. To further recover more indels, if one edge of the sequence being lifted over falls within any of the contiguous blocks from one of the chains but not the other end, the BCFtools liftover plugin will further extend the sequence until both ends fall within contiguous blocks from the same chain
-
-The BCFtools liftover plugin can be tested as follows
+The BCFtools liftover plugin can be used as follows
 ```
 wget ftp://ftp.1000genomes.ebi.ac.uk/vol1/ftp/release/20130502/ALL.wgs.phase3_shapeit2_mvncall_integrated_v5c.20130502.sites.vcf.gz{,.tbi}
-bcftools +liftover --no-version -Ou ALL.wgs.phase3_shapeit2_mvncall_integrated_v5b.20130502.sites.vcf.gz -- \
+bcftools +liftover --no-version -Ou ALL.wgs.phase3_shapeit2_mvncall_integrated_v5c.20130502.sites.vcf.gz -- \
   -s $HOME/GRCh37/human_g1k_v37.fasta \
   -f $HOME/GRCh38/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna \
   -c $HOME/GRCh38/hg19ToHg38.over.chain.gz \
-  --reject ALL.wgs.phase3_shapeit2_mvncall_integrated_v5b.20130502.sites.reject.bcf \
+  --reject ALL.wgs.phase3_shapeit2_mvncall_integrated_v5c.20130502.sites.reject.bcf \
   --reject-type b \
   --write-src | \
-bcftools sort -Ob | tee ALL.wgs.phase3_shapeit2_mvncall_integrated_v5b.20130502.sites.hg38.bcf | \
-bcftools index --force --output ALL.wgs.phase3_shapeit2_mvncall_integrated_v5b.20130502.sites.hg38.bcf.csi
+bcftools sort -Ob | tee ALL.wgs.phase3_shapeit2_mvncall_integrated_v5c.20130502.sites.hg38.bcf | \
+bcftools index --force --output ALL.wgs.phase3_shapeit2_mvncall_integrated_v5c.20130502.sites.hg38.bcf.csi
 ```
-
-These more advanced strategies are even more relevant when performing liftovers between references drawn from different samples, as the reference alleles are more likely to change across the two assemblies in these cases. A liftover between GRCh38 and T2T-CHM13v2.0 of non-singleton variants from the 1000 Genomes project high coverage (GRCh38 sites files available [here](http://http://ftp.1000genomes.ebi.ac.uk/vol1/ftp/data_collections/1000G_2504_high_coverage/working/20220422_3202_phased_SNV_INDEL_SV/)) has the following statistics
-
-| Tool               | Feature   | SNP        | (not joined) INDEL | (joined) INDEL |
-|--------------------|-----------|------------|--------------------|----------------|
-|                    | Total     | 63,993,411 | 9,459,059          | 6,711,682      |
-|                    |           |            |                    |                |
-|                    | Rejected  | 713,903    | 123,239            | 98,251         |
-| BCFtools +liftover | Ref added | 51,905     | 1,468,094          | 444,960        |
-|                    | Swapped   | 2,505,198  | 569,817            | 559,432        |
-|                    |           |            |                    |                |
-|                    | Rejected  | 765,808    | 1,168,430          | 771,147        |
-| Picard LiftoverVcf | Incorect  | 0          | 1,015,995          | 351,649        |
-|                    | Swapped   | 2,505,198  | 0                  | 0              |
 
 If your VCF has been normalized for only including bi-allelic variants, as indels tend to often be multi-allelic for the purpose of a liftover it might be useful to first join these into multi-allelic variants using `bcftools norm -m+` and then perform the liftover as follows
 ```
-bcftools norm --no-version -Ou -m+ 	1kGP_high_coverage_Illumina.sites.vcf.gz | \
+bcftools norm --no-version -Ou -m+ 1kGP_high_coverage_Illumina.sites.vcf.gz | \
 bcftools +liftover --no-version -Ou -- \
   -s $HOME/GRCh38/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna \
   -f $HOME/hs1/hs1.fa \
@@ -623,28 +730,6 @@ bcftools sort -Ob | tee 1kGP_high_coverage_Illumina.sites.hs1.bcf | \
 bcftools index --force --output 1kGP_high_coverage_Illumina.sites.hs1.bcf.csi
 ```
 Variants can then be split back into bi-allelic with the command `bcftools norm -m-`
-
-Compute best linear unbiased predictor
-======================================
-
-The BCFtools blupx plugin is inspired by the [BLUPx-ldgm](https://doi.org/10.1101/2022.09.06.506858) software, written and designed by Pouria Salehi Nowbandegani, Anthony Wilder Wohns, and Luke O’Connor, and it will apply the [best linear unbiased prediction](https://en.wikipedia.org/wiki/Best_linear_unbiased_prediction) (BLUP) model to compute improved polygenic weights starting from summary statistics following the [GWAS-VCF specification](https://github.com/MRCIEU/gwas-vcf-specification) following the MATLAB code from the [LDGM](https://github.com/awohns/ldgm) repository
-
-First of all, compute the number of markers shared between your LDGM-VCF file and your GWAS-VCF file:
-```
-b=1e-7
-bcftools isec -n 2 <score.gwas.vcf.gz> <ldgm.vcf.gz> -w 2 | bcftools query -f "%AF\n" | awk -v b=$b '{S+=2*$1*(1-$1)} END {print S*b}'
-```
-The output will give you the expected heritability from common SNPs. You can adjust the value `b` to yield the expected heritabilty for the trait you are working with. Once you have the correct value `b` you can then generate the BLUP loadings
-```
-bcftools +blupx \
-  --no-version \
-  --beta-cov $b \
-  <score.gwas.vcf.gz> \
-  <ldgm.vcf.gz> \
-  --output-type b \
-  --output <score.blup$b.vcf.gz>
-```
-You can also generate BLUP loadings for different values of `b` and then merge the output GWAS-VCFs into a single GWAS-VCF file that you can then use to compare the performance of different choices for `b`
 
 Run meta-analysis
 =================
@@ -782,6 +867,111 @@ for pfx in magic_SARDINIA DGI_three_regions MAGIC_FUSION_Results METAANALYSIS1; 
 done
 ```
 
+Compute polygenic score loadings
+================================
+
+The BCFtools pgs plugin is inspired by the [Graphpred](xxx) algorithm, written and designed by Pouria Salehi Nowbandegani, Anthony Wilder Wohns, Giulio Genovese, and Luke O’Connor. The method consists of two strategies: first it applies the [best linear unbiased prediction](https://en.wikipedia.org/wiki/Best_linear_unbiased_prediction) (BLUP) model to compute improved polygenic weights starting from summary statistics; then, to avoid the shortcomings of the infinitesimal model that does not correctly model the strong effects of sparse causal markers, it applies a generalization of the [SuSiE](https://doi.org/10.1111/rssb.12388) model using a Gibbs sampler instead of a variational approximation to iteratively refine the prior at SNPs with high residual association statistics. It models LD using sparse matrices derived from LD graphical models ([LDGMs](http://dx.doi.org/10.1038/s41588-023-01487-8)), allowing the linear algebra computations to run 10-100x faster than other methods. Compared to older methods such as PRS-CS that solely rely on ~1.3M HapMap3 common (minor allele frequency > 1%) SNPs, it achieves a 5-10% boost by relying instead on ~14M common (minor allele frequency > 1%) SNPs from the 1000 Genomes project high coverage reference panel. It can further model summary statistics from multiple ancestries at the same time
+
+The BCFtools pgs plugin is meant as an alternative to the following methods
+
+* [LDpred](http://dx.doi.org/10.1016/j.ajhg.2015.09.001) Vilhjálmsson, BJ., Yang, J., Finucane, HK., Modeling Linkage Disequilibrium Increases Accuracy of Polygenic Risk Scores. AJHG (2015)
+* [lassosum](https://doi.org/10.1002/gepi.22050) Mak, TSH., Porsch, RM., Choi, SW. et al. Polygenic scores via penalized regression on summary statistics. Genetic Epidemiology (2017)
+* [SBLUP](https://doi-org.ezp-prod1.hul.harvard.edu/10.1038/s41562-016-0016) Robinson, M., Kleinman, A., Graff, M. et al. Genetic evidence of assortative mating in humans. Nat Human Behav (2017)
+* [PRS-CS](https://doi.org/10.1038/s41467-019-09718-5) Ge, T., Chen, CY., Ni, Y. et al. Polygenic prediction via Bayesian regression and continuous shrinkage priors. Nat Commun (2019)
+* [JAM](https://doi.org/10.1002/gepi.22245) Newcombe, PJ., Nelson, CP., Samani, NJ., Dudbridge, F., A flexible and parallelizable approach to genome‐wide polygenic risk scores. Genetic Epidemiology (2019)
+* [SBayesR](https://doi.org/10.1038/s41467-019-12653-0) Lloyd-Jones, L.R., Zeng, J., Sidorenko, J. et al. Improved polygenic prediction by Bayesian multiple regression on summary statistics. Nat Commun (2019)
+* [DBSLMM](https://doi.org/10.1016/j.ajhg.2020.03.013) Yang, S., Zhou, X. Accurate and Scalable Construction of Polygenic Scores in Large Biobank Data Sets. AJHG (2020)
+* [NPS](https://doi.org/10.1016/j.ajhg.2020.05.004) Chun, S., Imakaev, M., Hui, D. et al. Non-parametric Polygenic Risk Prediction via Partitioned GWAS Summary Statistics. AJHG (2020)
+* [LDpred2](https://doi.org/10.1093/bioinformatics/btaa1029) Privé, F., Arbel, J., Vilhjálmsson, BJ., LDpred2: better, faster, stronger. Bioinformatics (2020)
+* [DBSLMM](https://doi.org/10.1016/j.ajhg.2020.03.013) Yang, S., Zhou, X., Accurate and Scalable Construction of Polygenic Scores in Large Biobank Data Sets. AJHG (2020)
+* [MegaPRS](https://doi.org/10.1038/s41467-021-24485-y) Zhang, Q., Privé, F., Vilhjalmsson, BJ., Speed, D., Improved genetic prediction of complex traits from individual-level data or summary statistics. Nat Commun (2020)
+* [Meta-PRS](https://doi.org/10.1016/j.ajhg.2021.04.014) Albiñana, C., Grove, J., McGrath, JJ. et al. Leveraging both individual-level genetic data and GWAS summary statistics increases polygenic prediction. AJHG (2021)
+* [SDPR](https://doi.org/10.1371/journal.pgen.1009697) Zhou, G., Zhao, H. A fast and robust Bayesian nonparametric method for prediction of complex traits using summary statistics. PLOS Genetics (2021)
+* [VIPRS](https://doi.org/10.1016/j.ajhg.2023.03.009) Zabad, S., Gravel, S., Li, Y., Fast and accurate Bayesian polygenic risk modeling with variational inference. AJHG (2023)
+
+The Gibbs sampling part of the GraphPred algorithm relies on being able to update and downdate a sparse Cholesky factorization of an input sparse matrix. This task is performed by CHOLMOD, a high performance library for sparse Cholesky factorization, itself part of the [SuiteSparse](https://people.engr.tamu.edu/davis/suitesparse.html) software suite written or co-authored by Tim Davis. CHOLMOD performs the Cholesky factorization of a sparse matrix using a supernodal strategy where some blocks of a sparse matrix are handled as dense blocks and processed using [BLAS](https://netlib.org/blas) and [LAPACK](https://netlib.org/lapack) dense linear algebra routines ([SYRK](http://www.netlib.org/lapack/explore-html/d1/d54/group__double__blas__level3_gae0ba56279ae3fa27c75fefbc4cc73ddf.html), [GEMM](http://www.netlib.org/lapack/explore-html/d1/d54/group__double__blas__level3_gaeda3cbd99c8fb834a60a6412878226e1.html), [GEMV](http://www.netlib.org/lapack/explore-html/d7/d15/group__double__blas__level2_gadd421a107a488d524859b4a64c1901a9.html), [POTRF](https://netlib.org/lapack/explore-html/d1/d7a/group__double_p_ocomputational_ga2f55f604a6003d03b5cd4a0adcfb74d6.html), and [TRSM](http://www.netlib.org/lapack/explore-html/d1/d54/group__double__blas__level3_ga6a0a7704f4a747562c1bd9487e89795c.html)). CHOLMOD supernodal Cholesky factorization is based on external libraries [METIS](http://glaros.dtc.umn.edu/gkhome/metis/metis/overview) to produce fill reducing orderings for sparse matrices and [OpenBLAS](https://www.openblas.net/) for dense linear algebra routines. Both CHOLMOD and OpenBLAS require [OpenMP](https://www.openmp.org/) for multithreading, which is provided by either [GOMP](https://gcc.gnu.org/projects/gomp/) or [LLVM/OpenMP](https://openmp.llvm.org/)
+
+Before performing a sparse Cholesky factorization, an alternative ordering of the rows and columns must be selected to keep the Cholesky factorization as sparse as possible. Three different strategies can be employed to do so
+
+* [AMD](https://doi.org/10.1137/S0895479894278952) Amestoy, PR., Davis, TA., Duff, IS., An Approximate Minimum Degree Ordering Algorithm. SIAM Journal on Matrix Analysis and Applications (1996)
+* [METIS](https://doi.org/10.1137/S1064827595287997) Karypis, G., Kumar, V., A Fast and High Quality Multilevel Scheme for Partitioning Irregular Graphs. SIAM Journal on scientific Computing (1998)
+* [NESDIS](https://doi.org/10.1145/1391989.1391995) Chen, Y., Davis, TA., Hager, WW., Rajamanickam, S., Algorithm 887: CHOLMOD, supernodal sparse Cholesky factorization and update/downdate. ACM Trans. on Mathematical Software (2008)
+
+You can control which ordering strategy to use with the option `--ordering` similarly to how it is done for the MATLAB function [analyze](https://github.com/DrTimothyAldenDavis/SuiteSparse/blob/dev/CHOLMOD/MATLAB/analyze.m)
+
+Running the BCFtools pgs plugin requires the following open source components
+
+| Software       | License      | Authors                                                                       | Function             |
+|----------------|--------------|-------------------------------------------------------------------------------|----------------------|
+| HTSlib         | MIT          | James K. Bonfield, John Marshall, Robert M. Davies, Petr Danecek, and Heng Li | input/output         |
+| BCFtools       | MIT          | Petr Danecek, Heng Li, and Shane McCarthy                                     | variant filtering    |
+| CHOLMOD        | LGPL 2.1+    | Timothy A. Davis                                                              | factorization        |
+| CHOLMOD/Modify | LGPL 2.1+    | Timothy A. Davis and William W. Hager.                                        | update/downdate      |
+| AMD            | BSD 3-Clause | Timothy A. Davis, Patrick R. Amestoy, and Iain S. Duff                        | ordering             |
+| METIS          | Apache       | George Karypis                                                                | ordering             |
+| OpenBLAS       | BSD 3-Clause | Zhang Xianyi, Martin Kroeker, Werner Saar, and Wang Qian                      | dense linear algebra |
+| GCC OpenMP     | GPL3         | Richard Henderson, Jakub Jelinek                                              | multithreading       |
+| LLVM/OpenMP    | NCSA         | Intel Corporation OpenMP runtime team                                         | multithreading       |
+
+Once the plugin has been installed, it can be used on summary statistics by first estimating two parameters:
+
+* sigmasqInf/beta-cov: a measure of the infinitesimal model
+* maxEffect/max-alpha-hat2: the strongest effect in the summary statistics to assess the non-infinitesimal model
+
+To evaluate these two parameters, run the plugin as follows:
+```
+bcftools +pgs --stats-only <score.gwas.vcf.gz> [<ldgm.vcf.gz> <ldgm2.vcf.gz> ...]
+```
+Once you have obtained those two parameters, run the plugin as follows:
+```
+bcftools +pgs \
+  --no-version \
+  --beta-cov <float> \
+  --max-alpha-hat2 <float> \
+  <score.gwas.vcf.gz> \
+  [<ldgm.vcf.gz> <ldgm2.vcf.gz> ...] \
+  --output-type z \
+  --output <score.pgs.b$b.vcf.gz>
+```
+
+Compute best linear unbiased predictor
+--------------------------------------
+
+The BCFtools blup plugin is inspired by the [BLUPx-ldgm](http://dx.doi.org/10.1038/s41588-023-01487-8) software, written and designed by Pouria Salehi Nowbandegani, Anthony Wilder Wohns, and Luke O’Connor, and it will apply the [best linear unbiased prediction](https://en.wikipedia.org/wiki/Best_linear_unbiased_prediction) (BLUP) model to compute improved polygenic weights starting from summary statistics following the [GWAS-VCF specification](https://github.com/MRCIEU/gwas-vcf-specification) following the MATLAB code from the [LDGM](https://github.com/awohns/ldgm) repository. This model applies an infinitesimal model for the prior effect sizes, similar to [LDpred-inf](https://doi.org/10.1016%2Fj.ajhg.2015.09.001). This model is only appropriate for very polygenic architectures such as those found in psychiatric diseases. We do not encourage the use of it for other phenotypes
+
+First of all, run the tool with the `--stats-only` option to evaluate the optimal `betaCov` parameter:
+```
+bcftools +blup --stats-only <score.gwas.vcf.gz> <ldgm.vcf.gz>
+```
+Once you have obtained the `betaCov` parameter you can then generate the BLUP loadings
+```
+bcftools +blup \
+  --no-version \
+  --beta-cov $b \
+  <score.gwas.vcf.gz> \
+  <ldgm.vcf.gz> \
+  --output-type z \
+  --output <score.blup.b$b.vcf.gz>
+```
+You can also generate BLUP loadings for different values of `betaCov` and then merge the output GWAS-VCFs into a single GWAS-VCF file that you can then use to compare the performance of different choices for `betaCov`
+
+Compute polygenic scores
+========================
+
+The BCFtools score plugin can input summary statistics files in a variety of formats, including those following the [GWAS-VCF specification](https://github.com/MRCIEU/gwas-vcf-specification), those following the [GWAS-SSF specification](https://ebispot.github.io/gwas-blog/new-standard-for-gwas-summary-statistics), and more in general most summary statistics files formatted as text tables with a header indicating which column to use. For GWAS-SSF and table summary statistiscs files, BCFtools score will automatically recognize the columns and attempt to match variants by chromosome and position if available and then by marker name if the genomic position is unavailable in the summary statistics file. Multiple summary statistics files can be input at once except you cannot mix GWAS-VCF summary statistics files with other files. If multiple summary statistics are present in a GWAS-VCF, all will be scored independently
+
+One advantage of the BCFtools score plugin is that it can be readily used on imputation VCFs without further format conversion. It will work with Minimac3, Minimac4, Beagle5, and IMPUTE5 output VCFs and more in general with any VCF including any of the following format fields
+
+| FORMAT  | Description                                      |
+|---------|--------------------------------------------------|
+| AP1/AP2 | ALT allele probability of first/second haplotype |
+| HDS     | Estimated Haploid Alternate Allele Dosage        |
+| GP      | Estimated Genotype Probability                   |
+| DS      | Genotype dosage                                  |
+| GT      | Genotype                                         |
+
+As polygenic scores are only meaningful up to an affine transformation, the BCFtools score plugin adopts the convention that a sample with genotypes matching the reference allele everywhere will receive a score of zero as betas are always assigned exclusively to alternate alleles. This way homozygous reference calls that might be missing from a VCF are guaranteed to not affect the final result in the case of VCFs originating from whole genome sequencing assays
+
 Annotation
 ==========
 
@@ -789,17 +979,17 @@ One of the advantages of the [GWAS-VCF specification](https://github.com/MRCIEU/
 
 To obtain a `gff3_file` the following code can be used
 ```
-wget -O- ftp://ftp.ensembl.org/pub/current_gff3/homo_sapiens/Homo_sapiens.GRCh38.108.gff3.gz | gunzip | \
+wget -O- ftp://ftp.ensembl.org/pub/current_gff3/homo_sapiens/Homo_sapiens.GRCh38.110.gff3.gz | gunzip | \
   sed -e 's/^##sequence-region   \([0-9XY]\)/##sequence-region   chr\1/' \
   -e 's/^##sequence-region   MT/##sequence-region   chrM/' \
-  -e 's/^\([0-9XY]\)/chr\1/' -e 's/^MT/chrM/' | gzip > $HOME/GRCh38/Homo_sapiens.GRCh38.108.gff3.gz
+  -e 's/^\([0-9XY]\)/chr\1/' -e 's/^MT/chrM/' | gzip > $HOME/GRCh38/Homo_sapiens.GRCh38.110.gff3.gz
 ```
 
 If you want to annotate the coding variants, you can do so with a simple command
 ```
 bcftools csq -Ob \
   -f $HOME/GRCh38/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna \
-  -g $HOME/GRCh38/Homo_sapiens.GRCh38.108.gff3.gz \
+  -g $HOME/GRCh38/Homo_sapiens.GRCh38.110.gff3.gz \
   -B 1 -c CSQ -l -n 64 -s - ieu-a-298.hg38.bcf | \
 tee ieu-a-298.hg38.csq.bcf | \
 bcftools index --force --output ieu-a-298.hg38.csq.bcf.csi
@@ -814,18 +1004,15 @@ bcftools +split-vep -Ou -c Consequence -i 'LP>7.3' ieu-a-298.hg38.csq.bcf | \
 To obtain an `rsid_vcf_file` the following code can be used:
 ```
 wget ftp://ftp.ncbi.nih.gov/snp/redesign/latest_release/VCF/GCF_000001405.39.gz{,.tbi}
-(echo "##fileformat=VCFv4.2"
-bcftools view --header-only GCF_000001405.39.gz | grep ^##INFO=\<ID=RS
-echo -e "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO") > tmp.vcf
-(bcftools reheader --fai GCA_000001405.15_GRCh38_no_alt_analysis_set.fna.fai --temp-prefix ./bcftools. tmp.vcf
-bcftools annotate --no-version --remove ID,^INFO/RS GCF_000001405.39.gz | grep -v "^#\|^NT_\|^NW_" | \
-sed 's/NC_012920\.[1-9][0-9]*/chrM/;s/^NC_0*\([1-9][0-9]*\)\.[1-9][0-9]*/chr\1/;s/^chr23/chrX/;s/^chr24/chrY/') | \
-bcftools norm --no-version --output-type u --multiallelics -any | \
+wget http://hgdownload.soe.ucsc.edu/goldenPath/hg38/bigZips/hg38.chromAlias.txt
+awk -F"\t" 'NR>1 {print $5"\t"$1}' hg38.chromAlias.txt | \
+bcftools annotate --no-version -Ou --rename-chrs - --remove ID,^INFO/RS GCF_000001405.39.gz | \
+bcftools norm --no-version --output-type u --multiallelics -any \
+  --targets-file <(awk '{print $1"\t1\t"$2}' GCA_000001405.15_GRCh38_no_alt_analysis_set.fna.fai) | \
 bcftools norm --no-version --output-type u --check-ref w --rm-dup none --fasta-ref GCA_000001405.15_GRCh38_no_alt_analysis_set.fna | \
 bcftools sort --output-type b --temp-dir ./bcftools. | \
 tee $HOME/GRCh38/GCF_000001405.39.GRCh38.bcf | \
 bcftools index --force --output $HOME/GRCh38/GCF_000001405.39.GRCh38.bcf.csi
-/bin/rm tmp.vcf
 ```
 
 Similarly, you can annotate rsID numbers with
@@ -853,7 +1040,7 @@ assoc_plot.R \
 
 If you generate an annotated version of the summary statistics
 ```
-bcftools csq -Ob -f $HOME/GRCh38/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna -g $HOME/GRCh38/Homo_sapiens.GRCh38.108.gff3.gz -B 1 -c CSQ -l -n 64 -s - GIANT_HEIGHT_YENGO_2022_GWAS_SUMMARY_STATS_ALL.hg38.bcf | \
+bcftools csq -Ob -f $HOME/GRCh38/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna -g $HOME/GRCh38/Homo_sapiens.GRCh38.110.gff3.gz -B 1 -c CSQ -l -n 64 -s - GIANT_HEIGHT_YENGO_2022_GWAS_SUMMARY_STATS_ALL.hg38.bcf | \
 tee GIANT_HEIGHT_YENGO_2022_GWAS_SUMMARY_STATS_ALL.hg38.csq.bcf | \
 bcftools index --force --output GIANT_HEIGHT_YENGO_2022_GWAS_SUMMARY_STATS_ALL.hg38.csq.bcf.csi
 ```
@@ -883,14 +1070,17 @@ assoc_plot.R \
 Examples
 ========
 
+Most of the following examples show how to process summary statistics mostly made available through the [Psychiatric Genomics Consortium](https://pgc.unc.edu/for-researchers/download-results/) (PGC) and generate polygenic score loadings
+
 Attention Deficit Hyperactivity Disorder
 ----------------------------------------
 
-Download [ADHD summary statistics](https://figshare.com/articles/dataset/adhdSexSpecific2018/19383299) from [2018 ADHD](http://doi.org/10.1016/j.biopsych.2017.11.026) and [2019 ADHD](http://doi.org/10.1038/s41588-018-0269-7) studies
+Download [ADHD summary statistics](https://figshare.com/articles/dataset/adhdSexSpecific2018/19383299) [2018 ADHD](http://doi.org/10.1016/j.biopsych.2017.11.026), [2019 ADHD](http://doi.org/10.1038/s41588-018-0269-7) and [2023 ADHD](https://doi.org/10.1038/s41588-022-01285-8) studies
 ```
 wget -O ADHD_female.GCST012597_buildGRCh37.tsv.gz https://figshare.com/ndownloader/files/35310529
 wget -O ADHD_male.GCST005362_buildGRCh37.tsv.gz https://figshare.com/ndownloader/files/35310532
 wget -O daner_adhd_meta_filtered_NA_iPSYCH23_PGC11_sigPCs_woSEX_2ell6sd_EUR_Neff_70.meta.gz https://figshare.com/ndownloader/files/28169253
+wget https://ipsych.dk/fileadmin/iPSYCH/PGC/ADHD_meta_Jan2022_iPSYCH1_iPSYCH2_deCODE_PGC.meta_2.zip
 
 for pfx in female.GCST012597 male.GCST005362; do
   zcat ADHD_${pfx}_buildGRCh37.tsv.gz | cut -f1-3,6- |  sed '1 s/orig_//g' | \
@@ -907,6 +1097,26 @@ bcftools +liftover --no-version -Ou -- -s human_g1k_v37.fasta \
   -f GCA_000001405.15_GRCh38_no_alt_analysis_set.fna -c hg19ToHg38.over.chain.gz | \
 bcftools sort -Ob | tee ADHD_2019.hg38.bcf | \
 bcftools index --force --output ADHD_2019.hg38.bcf.csi
+
+unzip -p ADHD_meta_Jan2022_iPSYCH1_iPSYCH2_deCODE_PGC.meta_2.zip \
+  ADHD_meta_Jan2022_iPSYCH1_iPSYCH2_deCODE_PGC.meta.gz | \
+bcftools +munge -C colheaders.tsv -f human_g1k_v37.fasta -s ADHD_2023 | \
+bcftools +liftover --no-version -Ou -- -s human_g1k_v37.fasta \
+  -f GCA_000001405.15_GRCh38_no_alt_analysis_set.fna -c hg19ToHg38.over.chain.gz | \
+bcftools sort -Ob | tee ADHD_meta_Jan2022_iPSYCH1_iPSYCH2_deCODE_PGC.hg38.bcf | \
+bcftools index --force --output ADHD_meta_Jan2022_iPSYCH1_iPSYCH2_deCODE_PGC.hg38.bcf.csi
+
+bcftools +pgs \
+  --no-version \
+  --beta-cov 1e-7 \
+  --max-alpha-hat2 8e-4 \
+  --exclude 'FILTER="IFFY"' \
+  ADHD_meta_Jan2022_iPSYCH1_iPSYCH2_deCODE_PGC.hg38.bcf \
+  1kg_ldgm.EUR.bcf \
+  --output-type b \
+  --log ADHD_meta_Jan2022_iPSYCH1_iPSYCH2_deCODE_PGC.hg38.pgs.b1e-7.log | \
+tee ADHD_meta_Jan2022_iPSYCH1_iPSYCH2_deCODE_PGC.hg38.pgs.b1e-7.bcf | \
+bcftools index --force --output ADHD_meta_Jan2022_iPSYCH1_iPSYCH2_deCODE_PGC.hg38.pgs.b1e-7.bcf.csi
 ```
 
 Anxiety Disorder
@@ -917,11 +1127,23 @@ Download [ANX summary statistics](https://figshare.com/articles/dataset/panic201
 wget -O pgc-panic2019.vcf.tsv.gz https://figshare.com/ndownloader/files/30731276
 
 zcat pgc-panic2019.vcf.tsv.gz | sed '/\t$/d' | \
-bcftools +munge --no-version -Ou -C colheaders.tsv --fai human_g1k_v37.fasta.fai -s ANX_2019 | \
-bcftools +liftover --no-version -Ou -- \
+bcftools +munge --no-version -Ou -C colheaders.tsv -f human_g1k_v37.fasta -s ANX_2019 | \
+bcftools +liftover --no-version -Ou -- -s human_g1k_v37.fasta \
   -f GCA_000001405.15_GRCh38_no_alt_analysis_set.fna -c hg19ToHg38.over.chain.gz | \
 bcftools sort -Ob | tee pgc-panic2019.hg38.bcf | \
 bcftools index --force --output pgc-panic2019.hg38.bcf.csi
+
+bcftools +pgs \
+  --no-version \
+  --beta-cov 2e-7 \
+  --max-alpha-hat2 0.008 \
+  --exclude 'FILTER="IFFY"' \
+  pgc-panic2019.hg38.bcf \
+  1kg_ldgm.EUR.bcf \
+  --output-type b \
+  --log pgc-panic2019.hg38.pgs.b2e-7.log | \
+tee pgc-panic2019.hg38.pgs.b2e-7.bcf | \
+bcftools index --force --output pgc-panic2019.hg38.pgs.b2e-7.bcf.csi
 ```
 
 Autism Spectrum Disorder
@@ -931,11 +1153,23 @@ Download [ASD summary statistics](https://figshare.com/articles/dataset/asd2019/
 ```
 wget -O iPSYCH-PGC_ASD_Nov2017.gz https://figshare.com/ndownloader/files/28169292
 
-bcftools +munge --no-version -Ou -C colheaders.tsv -f human_g1k_v37.fasta -s ASD_2017 iPSYCH-PGC_ASD_Nov2017.gz | \
+bcftools +munge --no-version -Ou -C colheaders.tsv -f human_g1k_v37.fasta -s ASD_2017 --ns 46351 --nc 18382 iPSYCH-PGC_ASD_Nov2017.gz | \
 bcftools +liftover --no-version -Ou -- -s human_g1k_v37.fasta \
   -f GCA_000001405.15_GRCh38_no_alt_analysis_set.fna -c hg19ToHg38.over.chain.gz | \
 bcftools sort -Ob | tee ASD_Nov2017.hg38.bcf | \
 bcftools index --force --output ASD_Nov2017.hg38.bcf.csi
+
+bcftools +pgs \
+  --no-version \
+  --beta-cov 1e-7 \
+  --max-alpha-hat2 8e-4 \
+  --exclude 'FILTER="IFFY"' \
+  ASD_Nov2017.hg38.bcf \
+  1kg_ldgm.EUR.bcf \
+  --output-type b \
+  --log ASD_Nov2017.hg38.pgs.b1e-7.log | \
+tee ASD_Nov2017.hg38.pgs.b1e-7.bcf | \
+bcftools index --force --output ASD_Nov2017.hg38.pgs.b1e-7.bcf.csi
 ```
 
 Bipolar Disorder
@@ -954,53 +1188,114 @@ for pfx in all BDI BDII; do
     -f GCA_000001405.15_GRCh38_no_alt_analysis_set.fna -c hg19ToHg38.over.chain.gz | \
   bcftools sort -Ob | tee pgc-bip2021-$pfx.hg38.bcf | \
   bcftools index --force --output pgc-bip2021-$pfx.hg38.bcf.csi
+
+  bcftools +pgs \
+    --no-version \
+    --beta-cov 2e-7 \
+    --max-alpha-hat2 0.001 \
+    --exclude 'FILTER="IFFY"' \
+    pgc-bip2021-$pfx.hg38.bcf \
+    1kg_ldgm.EUR.bcf \
+    --output-type b \
+    --log pgc-bip2021-$pfx.hg38.pgs.b2e-7.log | \
+  tee pgc-bip2021-$pfx.hg38.pgs.b2e-7.bcf | \
+  bcftools index --force --output pgc-bip2021-$pfx.hg38.pgs.b2e-7.bcf.csi
 done
 ```
 
-Eating Disorders
+Anorexia Nervosa
 ----------------
 
-Download [ED summary statistics](https://figshare.com/articles/dataset/an2019/14671980) from [2019 ED](http://doi.org/10.1038/s41588-019-0439-2) study
+Download [AN summary statistics](https://figshare.com/articles/dataset/an2019/14671980) from [2019 AN](http://doi.org/10.1038/s41588-019-0439-2) study
 ```
 wget -O pgcAN2.2019-07.vcf.tsv.gz https://figshare.com/ndownloader/files/28169271
 
-bcftools +munge --no-version -Ou -C colheaders.tsv --fai human_g1k_v37.fasta.fai -s ED_2019 pgcAN2.2019-07.vcf.tsv.gz | \
-bcftools +liftover --no-version -Ou -- \
+bcftools +munge --no-version -Ou -C colheaders.tsv -f human_g1k_v37.fasta -s AN_2019 pgcAN2.2019-07.vcf.tsv.gz | \
+bcftools +liftover --no-version -Ou -- -s human_g1k_v37.fasta \
   -f GCA_000001405.15_GRCh38_no_alt_analysis_set.fna -c hg19ToHg38.over.chain.gz | \
 bcftools sort -Ob | tee pgcAN2.2019-07.hg38.bcf | \
 bcftools index --force --output pgcAN2.2019-07.hg38.bcf.csi
+
+bcftools +pgs \
+  --no-version \
+  --beta-cov 2e-7 \
+  --max-alpha-hat2 0.001 \
+  --exclude 'FILTER="IFFY"' \
+  pgcAN2.2019-07.hg38.bcf \
+  1kg_ldgm.EUR.bcf \
+  --output-type b \
+  --log pgcAN2.2019-07.hg38.pgs.b2e-7.log | \
+tee pgcAN2.2019-07.hg38.pgs.b2e-7.bcf | \
+bcftools index --force --output pgcAN2.2019-07.hg38.pgs.b2e-7.bcf.csi
 ```
 
 Major Depressive Disorder
 -------------------------
 
-Download [MDD summary statistics](https://figshare.com/articles/dataset/mdd2021asi/16989442) from [2021 MDD](http://doi.org/10.1001/jamapsychiatry.2021.2099) study
+Download [MDD summary statistics](https://figshare.com/articles/dataset/mdd2021asi/16989442) from [2021 MDD](http://doi.org/10.1001/jamapsychiatry.2021.2099) study (samples sizes estimated from eTable2)
 ```
 wget -O jamapsy_Giannakopoulou_2021_exclude_whi_23andMe.txt.gz https://figshare.com/ndownloader/files/31424374
 wget -O jamapsy_Giannakopoulou_2021_exclude_whi_23andMe_ukb.txt.gz https://figshare.com/ndownloader/files/34437842
 
 for pfx in 23andMe{,_ukb}; do
+  if [ $pfx == 23andMe ]; then
+    ns=98502
+    nc=12588
+    ne=36886.75
+  else
+    ns=98003
+    nc=12455
+    ne=36496.54
+  fi
+  zcat jamapsy_Giannakopoulou_2021_exclude_whi_$pfx.txt.gz | uniq | \
+  sed 's/^\(rs142701510\t8\t2289342\t\)t\tc/\1a\tg/;s/^\(rs566706139\t8\t2289350\t\)t\tg/\1a\tc/;s/^\(rs74664568\t8\t2324610\t\)t\tc/\1a\tg/' | \
   bcftools +munge --no-version -Ou -C colheaders.tsv -f human_g1k_v37.fasta \
-    -s MDD_2021_$pfx jamapsy_Giannakopoulou_2021_exclude_whi_$pfx.txt.gz | \
+    -s MDD_2021 --ns $ns --nc $nc --ne $ne | \
   bcftools +liftover --no-version -Ou -- -s human_g1k_v37.fasta \
     -f GCA_000001405.15_GRCh38_no_alt_analysis_set.fna -c hg19ToHg38.over.chain.gz | \
   bcftools sort -Ob | tee jamapsy_Giannakopoulou_2021_exclude_whi_$pfx.hg38.bcf | \
   bcftools index --force --output jamapsy_Giannakopoulou_2021_exclude_whi_$pfx.hg38.bcf.csi
 done
+
+bcftools +pgs \
+  --no-version \
+  --beta-cov 3e-8 \
+  --max-alpha-hat2 0.001 \
+  --exclude 'FILTER="IFFY"' \
+  jamapsy_Giannakopoulou_2021_exclude_whi_23andMe_ukb.hg38.bcf \
+  1kg_ldgm.EUR.bcf \
+  --output-type b \
+  --log jamapsy_Giannakopoulou_2021_exclude_whi_23andMe_ukb.hg38.pgs.b3e8.log | \
+tee jamapsy_Giannakopoulou_2021_exclude_whi_23andMe_ukb.hg38.pgs.b3e8.bcf | \
+bcftools index --force --output jamapsy_Giannakopoulou_2021_exclude_whi_23andMe_ukb.hg38.pgs.b3e8.bcf.csi
 ```
 
-OCD & Tourette Syndrome
+Tourette Syndrome
 -----------------------
 
-Download [OCD-TS summary statistics](https://figshare.com/articles/dataset/ts2019/14672232) frm [2019 OCD-TS](http://doi.org/10.1176/appi.ajp.2018.18070857) study
+Download [TS summary statistics](https://figshare.com/articles/dataset/ts2019/14672232) frm [2019 TS](http://doi.org/10.1176/appi.ajp.2018.18070857) study
 ```
 wget -O TS_Oct2018.gz https://figshare.com/ndownloader/files/28169940
 
-bcftools +munge --no-version -Ou -C colheaders.tsv --fai human_g1k_v37.fasta.fai -s TS_2018 TS_Oct2018.gz | \
-bcftools +liftover --no-version -Ou -- \
+zcat TS_Oct2018.gz | sort -k2,2n -k3,3n | \
+sed 's/^\(rs8075185 17 36060216 \)A G/\1T C/;s/^\(rs2855958 7 142170167 \)T C/\1A G/;s/^\(rs17274 7 142224511 \)T C/\1A G/' | \
+bcftools +munge --no-version -Ou -C colheaders.tsv -f human_g1k_v37.fasta -s TS_2018 --ns 14307 --nc 4819 | \
+bcftools +liftover --no-version -Ou -- -s human_g1k_v37.fasta \
   -f GCA_000001405.15_GRCh38_no_alt_analysis_set.fna -c hg19ToHg38.over.chain.gz | \
 bcftools sort -Ob | tee TS_Oct2018.hg38.bcf | \
 bcftools index --force --output TS_Oct2018.hg38.bcf.csi
+
+bcftools +pgs \
+  --no-version \
+  --beta-cov 2e-7 \
+  --max-alpha-hat2 0.002 \
+  --exclude 'FILTER="IFFY"' \
+  TS_Oct2018.hg38.bcf \
+  1kg_ldgm.EUR.bcf \
+  --output-type b \
+  --log TS_Oct2018.hg38.pgs.b2e-7.log | \
+tee TS_Oct2018.hg38.pgs.b2e-7.bcf | \
+bcftools index --force --output TS_Oct2018.hg38.pgs.b2e-7.bcf.csi
 ```
 
 Post Traumatic Stress Disorder
@@ -1038,16 +1333,17 @@ tee pts_freeze2_overall.hg38.bcf | \
 bcftools index --force --output pts_freeze2_overall.hg38.bcf.csi
 /bin/rm pts_{aam,eur,lat}_freeze2_overall.hg38.bcf
 
-bcftools +blupx \
+bcftools +pgs \
   --no-version \
-  --beta-cov 1e-7 \
+  --beta-cov 4e-8 \
+  --max-alpha-hat2 0.001 \
   --samples PTSD_2019.AFR,PTSD_2019.EUR,PTSD_2019.AMR \
   pts_freeze2_overall.hg38.bcf \
   1kg_ldgm.{AFR,EUR,AMR}.bcf \
   --output-type b \
-  --log pts_freeze2_overall.hg38.blup1e-7.log | \
-tee pts_freeze2_overall.hg38.blup1e-7.bcf | \
-bcftools index --force --output pts_freeze2_overall.hg38.blup1e-7.bcf.csi
+  --log pts_freeze2_overall.hg38.pgsx.b4e-8.log | \
+tee pts_freeze2_overall.hg38.pgsx.b4e-8.bcf | \
+bcftools index --force --output pts_freeze2_overall.hg38.pgsx.b4e-8.bcf.csi
 ```
 
 Schizophrenia
@@ -1062,9 +1358,9 @@ wget -O PGC3_SCZ_wave3.core.chrX.public.v3.vcf.tsv.gz https://figshare.com/ndown
 
 for type in primary core; do
   for pfx in autosome chrX; do
-    zcat PGC3_SCZ_wave3.$type.$pfx.public.v3.vcf.tsv.gz | sed '/\t$/d' | \
-    bcftools +munge --no-version -Ou -C colheaders.tsv --fai human_g1k_v37.fasta.fai -s SCZ_2022.$type | \
-    bcftools +liftover --no-version -Ou -- \
+    zcat PGC3_SCZ_wave3.$type.$pfx.public.v3.vcf.tsv.gz | sed 's/NEFF$/NEFFDIV2/;/\t$/d' | \
+    bcftools +munge --no-version -Ou -C colheaders.tsv -f human_g1k_v37.fasta -s SCZ_2022.$type | \
+    bcftools +liftover --no-version -Ou -- -s human_g1k_v37.fasta \
       -f GCA_000001405.15_GRCh38_no_alt_analysis_set.fna -c hg19ToHg38.over.chain.gz | \
     bcftools sort -Ob | tee PGC3_SCZ_wave3.$type.$pfx.public.v3.hg38.bcf | \
     bcftools index --force --output PGC3_SCZ_wave3.$type.$pfx.public.v3.hg38.bcf.csi
@@ -1083,11 +1379,13 @@ wget -O PGC3_SCZ_wave3.asian.autosome.public.v3.vcf.tsv.gz https://figshare.com/
 wget -O PGC3_SCZ_wave3.european.autosome.public.v3.vcf.tsv.gz https://figshare.com/ndownloader/files/34517828
 wget -O PGC3_SCZ_wave3.latino.autosome.public.v3.vcf.tsv.gz https://figshare.com/ndownloader/files/34517855
 
-echo -e "AFR afram 9824 5998\nEAS asian 27363 12305\nEUR european 127906 52017\nAMR latino 4324 1234" | \
-while read anc type ns nc; do
-  bcftools +munge --no-version -Ou -C colheaders.tsv --fai human_g1k_v37.fasta.fai -s SCZ_2022.$anc --ns $ns --nc $nc \
-    PGC3_SCZ_wave3.$type.autosome.public.v3.vcf.tsv.gz | \
-  bcftools +liftover --no-version -Ou -- \
+echo -e "AFR afram\nEAS asian\nEUR european\nAMR latino" | \
+while read anc type; do
+  if [ type=="afram" ]; then opt="--ns 9824 --nc 5998 --ne 9234.7"; else opt=""; fi
+  if [ type=="latino" ]; then opt="--ns 4324 --nc 1234 --ne 3335.2"; else opt=""; fi
+  zcat PGC3_SCZ_wave3.$type.autosome.public.v3.vcf.tsv.gz | sed 's/NEFF$/NEFFDIV2/' | \
+  bcftools +munge --no-version -Ou -C colheaders.tsv -f human_g1k_v37.fasta -s SCZ_2022.$anc $opt | \
+  bcftools +liftover --no-version -Ou -- -s human_g1k_v37.fasta \
     -f GCA_000001405.15_GRCh38_no_alt_analysis_set.fna -c hg19ToHg38.over.chain.gz | \
   bcftools sort -Ob | tee PGC3_SCZ_wave3.$type.autosome.public.v3.hg38.bcf | \
   bcftools index --force --output PGC3_SCZ_wave3.$type.autosome.public.v3.hg38.bcf.csi
@@ -1095,18 +1393,47 @@ done
 bcftools merge --no-version -m none -Ob PGC3_SCZ_wave3.{afram,asian,european,latino}.autosome.public.v3.hg38.bcf | \
 tee PGC3_SCZ_wave3.autosome.public.v3.hg38.bcf | \
 bcftools index --force --output PGC3_SCZ_wave3.autosome.public.v3.hg38.bcf.csi
-/bin/rm PGC3_SCZ_wave3.{afram,asian,european,latino}.autosome.public.v3.hg38.bcf
+/bin/rm PGC3_SCZ_wave3.{afram,asian,european,latino}.autosome.public.v3.hg38.bcf{,.csi}
 
-bcftools +blupx \
+bcftools +pgs \
   --no-version \
   --beta-cov 2e-7 \
+  --max-alpha-hat2 0.002 \
   --samples SCZ_2022.AFR,SCZ_2022.EAS,SCZ_2022.EUR,SCZ_2022.AMR \
+  --exclude 'FILTER="IFFY"' \
   PGC3_SCZ_wave3.autosome.public.v3.hg38.bcf \
   1kg_ldgm.{AFR,EAS,EUR,AMR}.bcf \
   --output-type b \
-  --log PGC3_SCZ_wave3.autosome.public.v3.hg38.blup2e-7.log | \
-tee PGC3_SCZ_wave3.autosome.public.v3.hg38.blup2e-7.bcf | \
-bcftools index --force --output PGC3_SCZ_wave3.autosome.public.v3.hg38.blup2e-7.bcf.csi
+  --log PGC3_SCZ_wave3.autosome.public.v3.hg38.pgsx.b2e-7.log | \
+tee PGC3_SCZ_wave3.autosome.public.v3.hg38.pgsx.b2e-7.bcf | \
+bcftools index --force --output PGC3_SCZ_wave3.autosome.public.v3.hg38.pgsx.b2e-7.bcf.csi
+```
+
+Suicide
+-------
+
+Download [SUI summary statistics](https://tinyurl.com/ISGC2021) from [2022 SUI](http://doi.org/10.1016/j.biopsych.2021.05.029) study (notice that you will need a Dropbox link provided from [PGC.DAC.SUI](mailto:pgc.dac.sui@gmail.com))
+```
+wget -O daner_model2_062620_eur.neff.qc2.80.gz "https://www.dropbox.com/sh/<ISGC2021_D>/<ISGC2021_ID>_<ISGC2021_ID>/daner_model2_062620_eur.neff.qc2.80.gz?dl=0"
+
+zcat daner_model2_062620_eur.neff.qc2.80.gz | sed 's/\.y\t/\t/g' | \
+bcftools +munge --no-version -Ou -C colheaders.tsv -f human_g1k_v37.fasta -s SUI_2022 | \
+bcftools +liftover --no-version -Ou -- -s human_g1k_v37.fasta \
+  -f GCA_000001405.15_GRCh38_no_alt_analysis_set.fna -c hg19ToHg38.over.chain.gz | \
+bcftools sort -Ob | tee daner_model2_062620_eur.neff.qc2.80.bcf | \
+bcftools index --force --output daner_model2_062620_eur.neff.qc2.80.bcf.csi
+
+bcftools +pgs \
+  --no-version \
+  --beta-cov 1e-7 \
+  --max-alpha-hat2 0.0005 \
+  --exclude 'FILTER="IFFY"' \
+  daner_model2_062620_eur.neff.qc2.80.bcf \
+  1kg_ldgm.EUR.bcf \
+  --output-type b \
+  --log daner_model2_062620_eur.neff.qc2.80.pgs.b1e7.log | \
+tee daner_model2_062620_eur.neff.qc2.80.pgs.b1e7.bcf | \
+bcftools index --force --output daner_model2_062620_eur.neff.qc2.80.pgs.b1e7.bcf.csi
 ```
 
 Educational Attainment
@@ -1119,8 +1446,8 @@ wget https://ssgac.s3.amazonaws.com/EA4_additive_p1e-5_clumped.txt
 wget https://ssgac.s3.amazonaws.com/EA4_chrX_p1e-5_clumped.txt
 
 for pfx in additive chrX; do
-  bcftools +munge --no-version -Ou -C colheaders.tsv --fai human_g1k_v37.fasta.fai -s EA_2022 EA4_${pfx}_p1e-5_clumped.txt | \
-  bcftools +liftover --no-version -Ou -- \
+  bcftools +munge --no-version -Ou -C colheaders.tsv -f human_g1k_v37.fasta -s EA_2022 EA4_${pfx}_p1e-5_clumped.txt | \
+  bcftools +liftover --no-version -Ou -- -s human_g1k_v37.fasta \
     -f GCA_000001405.15_GRCh38_no_alt_analysis_set.fna -c hg19ToHg38.over.chain.gz | \
   bcftools sort -Ob | tee EA4_${pfx}_p1e-5_clumped.hg38.bcf | \
   bcftools index --force --output EA4_${pfx}_p1e-5_clumped.hg38.bcf.csi
@@ -1131,6 +1458,33 @@ bcftools index --force --output EA4_p1e-5_clumped.hg38.bcf.csi
 /bin/rm EA4_{additive,chrX}_p1e-5_clumped.hg38.bcf{,.csi}
 ```
 
+Intelligence
+------------
+
+Download [IQ summary statistics](https://ctg.cncr.nl/software/summary_statistics/) from [2018 IQ](http://doi.org/10.1038/s41588-018-0152-6) study
+```
+wget https://ctg.cncr.nl/documents/p1651/SavageJansen_IntMeta_sumstats.zip
+
+unzip -p SavageJansen_IntMeta_sumstats.zip sumstats/SavageJansen_2018_intelligence_metaanalysis.txt | \
+bcftools +munge --no-version -Ou -C colheaders.tsv -f human_g1k_v37.fasta -s IQ_2018 | \
+bcftools +liftover --no-version -Ou -- -s human_g1k_v37.fasta \
+  -f GCA_000001405.15_GRCh38_no_alt_analysis_set.fna -c hg19ToHg38.over.chain.gz | \
+bcftools sort -Ob | tee SavageJansen_IntMeta.hg38.bcf | \
+bcftools index --force --output SavageJansen_IntMeta.hg38.bcf.csi
+
+bcftools +pgs \
+  --no-version \
+  --beta-cov 1e-7 \
+  --max-alpha-hat2 0.0005 \
+  --exclude 'FILTER="IFFY"' \
+  SavageJansen_IntMeta.hg38.bcf \
+  1kg_ldgm.EUR.bcf \
+  --output-type b \
+  --log SavageJansen_IntMeta.hg38.pgs.b1e7.log | \
+tee SavageJansen_IntMeta.hg38.pgs.b1e7.bcf | \
+bcftools index --force --output SavageJansen_IntMeta.hg38.pgs.b1e7.bcf.csi
+```
+
 Height
 ------
 
@@ -1138,9 +1492,9 @@ Download [Height summary statistics](https://portals.broadinstitute.org/collabor
 ```
 wget https://cnsgenomics.com/data/giant_2022/GIANT_HEIGHT_YENGO_2022_GWAS_SUMMARY_STATS_ALL.gz
 
-bcftools +munge --no-version -Ou -C colheaders.tsv --fai human_g1k_v37.fasta.fai \
+bcftools +munge --no-version -Ou -C colheaders.tsv -f human_g1k_v37.fasta \
   -s HEIGHT_2022 GIANT_HEIGHT_YENGO_2022_GWAS_SUMMARY_STATS_ALL.gz | \
-bcftools +liftover --no-version -Ou -- \
+bcftools +liftover --no-version -Ou -- -s human_g1k_v37.fasta \
   -f GCA_000001405.15_GRCh38_no_alt_analysis_set.fna -c hg19ToHg38.over.chain.gz | \
 bcftools sort -Ob | tee GIANT_HEIGHT_YENGO_2022_GWAS_SUMMARY_STATS_ALL.hg38.bcf | \
 bcftools index --force --output GIANT_HEIGHT_YENGO_2022_GWAS_SUMMARY_STATS_ALL.hg38.bcf.csi
@@ -1156,9 +1510,9 @@ wget https://cnsgenomics.com/data/giant_2022/GIANT_HEIGHT_YENGO_2022_GWAS_SUMMAR
 
 echo -e "AFR AFR\nEAS EAS\nEUR EUR\nAMR HIS\nSAS SAS" | \
 while read anc type; do
-  bcftools +munge --no-version -Ou -C colheaders.tsv --fai human_g1k_v37.fasta.fai -s HEIGHT_2022.$anc \
+  bcftools +munge --no-version -Ou -C colheaders.tsv -f human_g1k_v37.fasta -s HEIGHT_2022.$anc \
     GIANT_HEIGHT_YENGO_2022_GWAS_SUMMARY_STATS_$type.gz | \
-  bcftools +liftover --no-version -Ou -- \
+  bcftools +liftover --no-version -Ou -- -s human_g1k_v37.fasta \
     -f GCA_000001405.15_GRCh38_no_alt_analysis_set.fna -c hg19ToHg38.over.chain.gz | \
   bcftools sort -Ob | tee GIANT_HEIGHT_YENGO_2022_GWAS_SUMMARY_STATS_$type.hg38.bcf | \
   bcftools index --force --output GIANT_HEIGHT_YENGO_2022_GWAS_SUMMARY_STATS_$type.hg38.bcf.csi
@@ -1168,16 +1522,17 @@ tee GIANT_HEIGHT_YENGO_2022_GWAS_SUMMARY_STATS.hg38.bcf | \
 bcftools index --force --output GIANT_HEIGHT_YENGO_2022_GWAS_SUMMARY_STATS.hg38.bcf.csi
 /bin/rm GIANT_HEIGHT_YENGO_2022_GWAS_SUMMARY_STATS_{AFR,EAS,EUR,HIS,SAS}.hg38.bcf
 
-bcftools +blupx \
+bcftools +pgs \
   --no-version \
-  --beta-cov 2e-7 \
+  --beta-cov 1e-7 \
+  --max-alpha-hat2 0.005 \
   --samples HEIGHT_2022.AFR,HEIGHT_2022.EAS,HEIGHT_2022.EUR,HEIGHT_2022.AMR,HEIGHT_2022.SAS \
   GIANT_HEIGHT_YENGO_2022_GWAS_SUMMARY_STATS.hg38.bcf \
   1kg_ldgm.{AFR,EAS,EUR,AMR,SAS}.bcf \
   --output-type b \
-  --log GIANT_HEIGHT_YENGO_2022_GWAS_SUMMARY_STATS.hg38.blup2e-7.log | \
-tee GIANT_HEIGHT_YENGO_2022_GWAS_SUMMARY_STATS.hg38.blup2e-7.bcf | \
-bcftools index --force --output GIANT_HEIGHT_YENGO_2022_GWAS_SUMMARY_STATS.hg38.blup2e-7.bcf.csi
+  --log GIANT_HEIGHT_YENGO_2022_GWAS_SUMMARY_STATS.hg38.pgsx.b1e-7.log | \
+tee GIANT_HEIGHT_YENGO_2022_GWAS_SUMMARY_STATS.hg38.pgsx.b1e-7.bcf | \
+bcftools index --force --output GIANT_HEIGHT_YENGO_2022_GWAS_SUMMARY_STATS.hg38.pgsx.b1e-7.bcf.csi
 ```
 
 BMI
@@ -1188,12 +1543,23 @@ Download [BMI summary statistics](https://portals.broadinstitute.org/collaborati
 ```
 wget https://portals.broadinstitute.org/collaboration/giant/images/c/c8/Meta-analysis_Locke_et_al%2BUKBiobank_2018_UPDATED.txt.gz
 
-bcftools +munge --no-version -Ou -C colheaders.tsv --fai human_g1k_v37.fasta.fai \
+bcftools +munge --no-version -Ou -C colheaders.tsv -f human_g1k_v37.fasta \
   -s BMI_2018 Meta-analysis_Locke_et_al+UKBiobank_2018_UPDATED.txt.gz | \
-bcftools +liftover --no-version -Ou -- \
+bcftools +liftover --no-version -Ou -- -s human_g1k_v37.fasta \
   -f GCA_000001405.15_GRCh38_no_alt_analysis_set.fna -c hg19ToHg38.over.chain.gz | \
 bcftools sort -Ob | tee Meta-analysis_Locke_et_al+UKBiobank_2018_UPDATED.hg38.bcf | \
 bcftools index --force --output Meta-analysis_Locke_et_al+UKBiobank_2018_UPDATED.hg38.bcf.csi
+
+bcftools +pgs \
+  --no-version \
+  --beta-cov 2e-7 \
+  --max-alpha-hat2 0.002 \
+  Meta-analysis_Locke_et_al+UKBiobank_2018_UPDATED.hg38.bcf \
+  1kg_ldgm.EUR.bcf \
+  --output-type b \
+  --log Meta-analysis_Locke_et_al+UKBiobank_2018_UPDATED.hg38.pgs.b2e-7.log | \
+tee Meta-analysis_Locke_et_al+UKBiobank_2018_UPDATED.hg38.pgs.b2e-7.bcf | \
+bcftools index --force --output Meta-analysis_Locke_et_al+UKBiobank_2018_UPDATED.hg38.pgs.b2e-7.bcf.csi
 ```
 
 Smoking
@@ -1204,11 +1570,76 @@ Download [Smoking summary statistics](https://conservancy.umn.edu/handle/11299/2
 ```
 wget https://conservancy.umn.edu/bitstream/handle/11299/201564/SmokingInitiation.txt.gz
 
-bcftools +munge --no-version -Ou -C colheaders.tsv --fai human_g1k_v37.fasta.fai -s SMOKING_2019 SmokingInitiation.txt.gz | \
-bcftools +liftover --no-version -Ou -- \
+bcftools +munge --no-version -Ou -C colheaders.tsv -f human_g1k_v37.fasta -s SMOKING_2019 SmokingInitiation.txt.gz | \
+bcftools +liftover --no-version -Ou -- -s human_g1k_v37.fasta \
   -f GCA_000001405.15_GRCh38_no_alt_analysis_set.fna -c hg19ToHg38.over.chain.gz | \
 bcftools sort -Ob | tee SmokingInitiation.hg38.bcf | \
 bcftools index --force --output SmokingInitiation.hg38.bcf.csi
+
+bcftools +pgs \
+  --no-version \
+  --beta-cov 2e-8 \
+  --max-alpha-hat2 0.0005 \
+  SmokingInitiation.hg38.bcf \
+  1kg_ldgm.EUR.bcf \
+  --output-type b \
+  --log SmokingInitiation.hg38.pgs.b2e-8.log | \
+tee SmokingInitiation.hg38.pgs.b2e-8.bcf | \
+bcftools index --force --output SmokingInitiation.hg38.pgs.b2e-8.bcf.csi
+```
+
+Alzheimer
+---------
+
+Download [Alzheimer summary statistics](https://www.niagads.org/datasets/ng00075) from [2019 Alzheimer](https://doi.org/10.1038/s41588-019-0358-2) study
+
+```
+wget -O Kunkle_etal_Stage2_results.txt https://www.niagads.org/system/tdf/public_docs/Kunkle_etal_Stage2_results.txt?file=1
+
+bcftools +munge --no-version -Ou \
+  -C colheaders.tsv -f human_g1k_v37.fasta \
+  -s AD_2019 Kunkle_etal_Stage2_results.txt | \
+bcftools +liftover --no-version -Ou -- -s human_g1k_v37.fasta\
+  -f GCA_000001405.15_GRCh38_no_alt_analysis_set.fna -c hg19ToHg38.over.chain.gz | \
+bcftools sort -Ob | tee Kunkle_etal_Stage2_results.hg38.bcf | \
+bcftools index --force --output Kunkle_etal_Stage2_results.hg38.bcf.csi
+```
+
+Download [Alzheimer summary statistics](https://www.ebi.ac.uk/gwas/studies/GCST90027158) from [2022 Alzheimer](https://doi.org/10.1038/s41588-022-01024-z) study
+
+```
+wget http://ftp.ebi.ac.uk/pub/databases/gwas/summary_statistics/GCST90027001-GCST90028000/GCST90027158/GCST90027158_buildGRCh38.tsv.gz
+
+bcftools +munge --no-version -Ob -C colheaders.tsv \
+  -f GCA_000001405.15_GRCh38_no_alt_analysis_set.fna \
+  -s AD_2022 GCST90027158_buildGRCh38.tsv.gz | \
+tee GCST90027158.hg38.bcf | \
+bcftools index --force --output GCST90027158.hg38.bcf.csi
+
+bcftools +pgs \
+  --no-version \
+  --beta-cov 2e-8 \
+  --max-alpha-hat2 0.002 \
+  GCST90027158.hg38.bcf \
+  1kg_ldgm.EUR.bcf \
+  --exclude 'FILTER="IFFY"' \
+  --output-type b \
+  --log GCST90027158.hg38.pgs.b2e-8.log | \
+tee GCST90027158.hg38.pgs.b2e-8.bcf | \
+bcftools index --force --output GCST90027158.hg38.pgs.b2e-8.bcf.csi
+
+bcftools +pgs \
+  --no-version \
+  --alpha-param 0 \
+  --beta-cov 4e-8 \
+  --max-alpha-hat2 0.002 \
+  GCST90027158.hg38.bcf \
+  1kg_ldgm.EUR.bcf \
+  --exclude 'FILTER="IFFY"' \
+  --output-type b \
+  --log GCST90027158.hg38.pgs.a0.b4e-8.log | \
+tee GCST90027158.hg38.pgs.a0.b4e-8.bcf | \
+bcftools index --force --output GCST90027158.hg38.pgs.a0.b4e-8.bcf.csi
 ```
 
 Acknowledgements

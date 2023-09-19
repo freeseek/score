@@ -1,6 +1,6 @@
 /* The MIT License
 
-   Copyright (C) 2022 Giulio Genovese
+   Copyright (C) 2022-2023 Giulio Genovese
 
    Author: Giulio Genovese <giulio.genovese@gmail.com>
 
@@ -27,12 +27,16 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <getopt.h>
+#include <htslib/ksort.h>
 #include <htslib/synced_bcf_reader.h>
 #include <htslib/vcf.h>
 #include "bcftools.h"
 #include "filter.h"
 
-#define BLUPX_VERSION "2022-12-21"
+#define BLUP_VERSION "2023-09-19"
+
+#define AVERAGE_LD_SCORE_DFLT 72.6
+#define MEDIAN_CHISQ 0.45493642311957283031 // qchisq(.5,1)
 
 // Logic of the filters: include or exclude sites which match the filters?
 #define FLT_INCLUDE 1
@@ -45,10 +49,9 @@
 #define ES 3
 #define SE 4
 #define LP 5
-#define AF 6
-#define NE 7
-#define SIZE 8
-static const char *id_str[SIZE] = {"NS", "EZ", "NC", "ES", "SE", "LP", "AF", "NE"};
+#define NE 6
+#define SIZE 7
+static const char *id_str[SIZE] = {"NS", "EZ", "NC", "ES", "SE", "LP", "NE"};
 
 static const char *desc_str[SIZE] = {
     "Variant-specific number of samples/individuals with called genotypes used to test association with specified "
@@ -58,11 +61,13 @@ static const char *desc_str[SIZE] = {
     "Effect size estimate relative to the alternative allele",                               // ES
     "Standard error of effect size estimate",                                                // SE
     "-log10 p-value for effect estimate",                                                    // LP
-    "Alternative allele frequency in trait subset"};                                         // AF
+    "Variant-specific effective sample size"};                                               // NE
 
 /****************************************
  * FUNCTION TO COMPUTE Z FROM LOG P     *
  ****************************************/
+
+#define M_2PI 6.283185307179586476925286766559 /* 2*pi */
 
 // Wichura, M. J. Algorithm AS 241: The Percentage Points of the Normal Distribution. Applied Statistics 37, 477 (1988).
 // https://doi.org/10.2307/2347330 PPND16 function (algorithm AS241) http://lib.stat.cmu.edu/apstat/241
@@ -124,18 +129,61 @@ static double inv_log_ndist(double log_p) {
                / (((((((b7 * r + b6) * r + b5) * r + b4) * r + b3) * r + b2) * r + b1) * r + 1.0);
     }
     r = q < 0 ? sqrt(-log_p) : sqrt(-log(1.0 - p));
-    if (r <= 5.0) {
+    if (r <= 5.0) { // for p >= 1.389e−11
         r -= 1.6;
         x = (((((((c7 * r + c6) * r + c5) * r + c4) * r + c3) * r + c2) * r + c1) * r + c0)
             / (((((((d7 * r + d6) * r + d5) * r + d4) * r + d3) * r + d2) * r + d1) * r + 1.0);
-    } else if (r < 816) {
+    } else if (r <= 27) { // for p >= 2.51e-317
         r -= 5.0;
         x = (((((((e7 * r + e6) * r + e5) * r + e4) * r + e3) * r + e2) * r + e1) * r + e0)
             / (((((((f7 * r + f6) * r + f5) * r + f4) * r + f3) * r + f2) * r + f1) * r + 1.0);
+    } else if (r < 6.4e8) {               // improvement from Martin Maechler
+        double s2 = -2 * log_p;           // = -2*lp = 2s
+        double x2 = s2 - log(M_2PI * s2); // = xs_1
+        if (r < 36000) {
+            x2 = s2 - log(M_2PI * x2) - 2 / (2 + x2);                                  // == xs_2
+            if (r < 840) {                                                             // 27 < r < 840
+                x2 = s2 - log(M_2PI * x2) + 2 * log1p(-(1 - 1 / (4 + x2)) / (2 + x2)); // == xs_3
+                if (r < 109) {                                                         // 27 < r < 109
+                    x2 = s2 - log(M_2PI * x2) + 2 * log1p(-(1 - (1 - 5 / (6 + x2)) / (4 + x2)) / (2 + x2)); // == xs_4
+                    if (r < 55) { // 27 < r < 55
+                        x2 = s2 - log(M_2PI * x2)
+                             + 2 * log1p(-(1 - (1 - (5 - 9 / (8 + x2)) / (6 + x2)) / (4 + x2)) / (2 + x2)); // == xs_5
+                    }
+                }
+            }
+        }
+        x = sqrt(x2);
     } else {
-        return r * M_SQRT2; // improvement from Ross Ihaka?
+        return r * M_SQRT2;
     }
     return q < 0 ? -x : x;
+}
+
+// this macro from ksort.h defines the function
+// double ks_ksmall_double(size_t n, double arr[], size_t kk);
+KSORT_INIT_GENERIC(double)
+
+// compute the median of a vector using the ksort library (with iterator)
+double get_median(const double *v, int n, int shift) {
+    if (n == 0) return NAN;
+    double *w = (double *)malloc(n * sizeof(double));
+    for (int i = 0; i < n; i++) w[i] = v[i * shift];
+    double ret = ks_ksmall_double((size_t)n, w, (size_t)n / 2);
+    if (n % 2 == 0) ret = (ret + w[n / 2 - 1]) * 0.5f;
+    free(w);
+    return ret;
+}
+
+// compute the median of a vector using the ksort library (with iterator)
+double get_median2(const double *v, int n, int shift) {
+    if (n == 0) return NAN;
+    double *w = (double *)malloc(n * sizeof(double));
+    for (int i = 0; i < n; i++) w[i] = v[i * shift] * v[i * shift];
+    double ret = ks_ksmall_double((size_t)n, w, (size_t)n / 2);
+    if (n % 2 == 0) ret = (ret + w[n / 2 - 1]) * 0.5f;
+    free(w);
+    return ret;
 }
 
 /****************************************
@@ -147,11 +195,11 @@ static double inv_log_ndist(double log_p) {
 typedef struct {
     int i;
     int j;
-    double z;
+    double x;
 } coo_cell_t;
 
 typedef struct {
-    int n_rows;
+    int nrow;
     int nnz;
     int m_d;
     double *d; // elements on the diagonal
@@ -162,15 +210,15 @@ typedef struct {
 // Compressed Sparse Row matrix structure
 // see https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.csr_matrix.html
 typedef struct {
-    int n_rows;   // number of rows
-    double *d;    // elements on the diagonal
-    int *row_ptr; // ptr to the row starts, length n+1
-    int *cols;    // column index, length n
-    double *z;    // cell values, length n
+    int nrow;  // number of rows
+    double *d; // elements on the diagonal
+    int *p;    // ptr to the row starts, length n+1
+    int *j;    // column index, length j[nrow]
+    double *x; // cell values, length j[nrow]
 } csr_matrix_t;
 
 static void coo_clear(coo_matrix_t *coo) {
-    coo->n_rows = 0;
+    coo->nrow = 0;
     coo->nnz = 0;
     memset((void *)coo->d, 0, sizeof(double) * coo->m_d);
 }
@@ -182,50 +230,50 @@ static void coo_destroy(coo_matrix_t *coo) {
 
 static void csr_destroy(csr_matrix_t *csr) {
     free(csr->d);
-    free(csr->row_ptr);
-    free(csr->cols);
-    free(csr->z);
+    free(csr->p);
+    free(csr->j);
+    free(csr->x);
 }
 
-static inline void append_diag(int i, double z, coo_matrix_t *coo) {
+static inline void append_diag(int i, double x, coo_matrix_t *coo) {
     hts_expand0(double, i + 1, coo->m_d, coo->d);
-    coo->d[i] = z;
+    coo->d[i] = x;
 }
 
-static inline void append_nnz(int i, int j, double z, coo_matrix_t *coo) {
+static inline void append_nnz(int i, int j, double x, coo_matrix_t *coo) {
     coo->nnz++;
     hts_expand(coo_cell_t, coo->nnz, coo->m, coo->cell);
     coo_cell_t *cell = &coo->cell[coo->nnz - 1];
     cell->i = i;
     cell->j = j;
-    cell->z = z;
+    cell->x = x;
 }
 
 // see https://github.com/rgl-epfl/cholespy/blob/main/src/cholesky_solver.cpp
 static inline void coo_to_csr(const coo_matrix_t *coo, csr_matrix_t *csr) {
     int k;
-    csr->n_rows = coo->n_rows;
-    csr->d = csr->n_rows ? (double *)calloc(sizeof(double), csr->n_rows) : NULL;
-    memcpy(csr->d, coo->d, sizeof(double) * (coo->n_rows > coo->m_d ? coo->m_d : coo->n_rows));
-    csr->row_ptr = (int *)calloc(sizeof(int), csr->n_rows + 1);
-    csr->cols = (int *)malloc(sizeof(int) * coo->nnz);
-    csr->z = (double *)malloc(sizeof(double) * coo->nnz);
+    csr->nrow = coo->nrow;
+    csr->d = csr->nrow ? (double *)calloc(sizeof(double), csr->nrow) : NULL;
+    memcpy(csr->d, coo->d, sizeof(double) * (coo->nrow > coo->m_d ? coo->m_d : coo->nrow));
+    csr->p = (int *)calloc(sizeof(int), csr->nrow + 1);
+    csr->j = (int *)malloc(sizeof(int) * coo->nnz);
+    csr->x = (double *)malloc(sizeof(double) * coo->nnz);
 
-    for (k = 0; k < coo->nnz; k++) csr->row_ptr[coo->cell[k].i + 1]++;
+    for (k = 0; k < coo->nnz; k++) csr->p[coo->cell[k].i + 1]++;
 
-    csr->row_ptr[0] = 0;
-    for (k = 0; k < csr->n_rows; k++) csr->row_ptr[k + 1] += csr->row_ptr[k];
+    csr->p[0] = 0;
+    for (k = 0; k < csr->nrow; k++) csr->p[k + 1] += csr->p[k];
 
     for (k = 0; k < coo->nnz; k++) {
         int row = coo->cell[k].i;
-        int dst = csr->row_ptr[row];
-        csr->cols[dst] = coo->cell[k].j;
-        csr->z[dst] = coo->cell[k].z;
-        csr->row_ptr[row]++;
+        int dst = csr->p[row];
+        csr->j[dst] = coo->cell[k].j;
+        csr->x[dst] = coo->cell[k].x;
+        csr->p[row]++;
     }
 
-    for (k = csr->n_rows; k > 0; k--) csr->row_ptr[k] = csr->row_ptr[k - 1];
-    csr->row_ptr[0] = 0;
+    for (k = csr->nrow; k > 0; k--) csr->p[k] = csr->p[k - 1];
+    csr->p[0] = 0;
 }
 
 /****************************************
@@ -234,37 +282,37 @@ static inline void coo_to_csr(const coo_matrix_t *coo, csr_matrix_t *csr) {
 
 // return P += S
 static inline void add_matrix(const coo_matrix_t *S, coo_matrix_t *P) {
-    if (S->n_rows != P->n_rows) error("Error: Sigma and Precision matrix have different dimensions\n");
+    if (S->nrow != P->nrow) error("Error: Sigma and Precision matrix have different dimensions\n");
 
     // add diagonal elements
-    int n = S->n_rows > S->m_d ? S->m_d : S->n_rows;
+    int n = S->nrow > S->m_d ? S->m_d : S->nrow;
     hts_expand0(double, n, P->m_d, P->d);
     for (int k = 0; k < n; k++) P->d[k] += S->d[k];
 
     // add non-diagonal elements
-    for (int k = 0; k < S->nnz; k++) append_nnz(S->cell[k].i, S->cell[k].j, S->cell[k].z, P);
+    for (int k = 0; k < S->nnz; k++) append_nnz(S->cell[k].i, S->cell[k].j, S->cell[k].x, P);
 }
 
 // return A ./ x
 static inline void matdiv(coo_matrix_t *A, double x) {
-    int n = A->n_rows > A->m_d ? A->m_d : A->n_rows;
+    int n = A->nrow > A->m_d ? A->m_d : A->nrow;
     for (int k = 0; k < n; k++) A->d[k] /= x;
-    for (int k = 0; k < A->nnz; k++) A->cell[k].z /= x;
+    for (int k = 0; k < A->nnz; k++) A->cell[k].x /= x;
 }
 
 // return A * x for square matrices with diagonal elements
-static inline void matvec(const csr_matrix_t *A, const double *x, double *y) {
-    for (int i = 0; i < A->n_rows; i++) {
+static inline void sdmult(const csr_matrix_t *A, const double *x, double *y) {
+    for (int i = 0; i < A->nrow; i++) {
         y[i] = A->d[i] * x[i];
-        for (int j = A->row_ptr[i]; j < A->row_ptr[i + 1]; j++) y[i] += A->z[j] * x[A->cols[j]];
+        for (int j = A->p[i]; j < A->p[i + 1]; j++) y[i] += A->x[j] * x[A->j[j]];
     }
 }
 
 // return A * x for rectangular matrices without diagonal elements
-static inline void rect_matvec(const csr_matrix_t *A, const double *x, double *y) {
-    for (int i = 0; i < A->n_rows; i++) {
+static inline void rect_sdmult(const csr_matrix_t *A, const double *x, double *y) {
+    for (int i = 0; i < A->nrow; i++) {
         y[i] = 0.0;
-        for (int j = A->row_ptr[i]; j < A->row_ptr[i + 1]; j++) y[i] += A->z[j] * x[A->cols[j]];
+        for (int j = A->p[i]; j < A->p[i + 1]; j++) y[i] += A->x[j] * x[A->j[j]];
     }
 }
 
@@ -281,21 +329,21 @@ static inline double dot(const double *x, const double *y, int n) {
 // https://en.wikipedia.org/wiki/Conjugate_gradient_method#The_preconditioned_conjugate_gradient_method
 // alternative approach to https://github.com/awohns/ldgm/blob/main/MATLAB/precisionDivide.m
 static int pcg(const csr_matrix_t *A, double *x, double tol, int jacobi) {
-    int iter, n = A->n_rows;
+    int iter, n = A->nrow;
     double rsold, rsnew, tol2 = tol * tol;
     double *p = (double *)malloc(sizeof(double) * n);
     double *r = (double *)malloc(sizeof(double) * n);
     double *Ap = (double *)malloc(sizeof(double) * n);
     double *z = jacobi ? (double *)malloc(sizeof(double) * n) : r;
 
-    matvec(A, x, Ap);
+    sdmult(A, x, Ap);
     for (int i = 0; i < n; i++) r[i] = x[i] - Ap[i];
     if (jacobi)
         for (int i = 0; i < n; i++) z[i] = r[i] / A->d[i]; // Jacobi preconditioning
     for (int i = 0; i < n; i++) p[i] = z[i];
     rsold = dot(r, z, n);
     for (iter = 0; iter < n; iter++) {
-        matvec(A, p, Ap);
+        sdmult(A, p, Ap);
         double alpha = rsold / dot(p, Ap, n);
         for (int i = 0; i < n; i++) x[i] += alpha * p[i];
         for (int i = 0; i < n; i++) r[i] -= alpha * Ap[i];
@@ -319,13 +367,13 @@ static int pcg(const csr_matrix_t *A, double *x, double tol, int jacobi) {
 // computes x = (P/P00)y where P = [P00, P01; P10, P11] and P/P00 is the Schur complement
 // https://en.wikipedia.org/wiki/Schur_complement
 static int precision_multiply(const csr_matrix_t schur[][2], const double *y1, double tol, int jacobi, double *x1) {
-    int n0 = schur[0][0].n_rows;
-    int n1 = schur[1][1].n_rows;
+    int n0 = schur[0][0].nrow;
+    int n1 = schur[1][1].nrow;
     double *tmp = (double *)malloc(sizeof(double) * (n0 > n1 ? n0 : n1));
-    rect_matvec(&schur[0][1], y1, tmp);
+    rect_sdmult(&schur[0][1], y1, tmp);
     int n_iter = pcg(&schur[0][0], tmp, tol, jacobi);
-    rect_matvec(&schur[1][0], tmp, x1);
-    matvec(&schur[1][1], y1, tmp);
+    rect_sdmult(&schur[1][0], tmp, x1);
+    sdmult(&schur[1][1], y1, tmp);
     for (int i = 0; i < n1; i++) x1[i] = tmp[i] - x1[i];
     free(tmp);
     return n_iter;
@@ -339,11 +387,10 @@ static int precision_multiply(const csr_matrix_t schur[][2], const double *y1, d
 typedef struct {
     int ld_node;
     int n_line; // map to the location of the corresponding GWAS-VCF line, if found
-    float af_deriv;
     double ez_deriv;
-    double sd; // SE(beta) = 1 / (2pq) / N_eff
-    double ne; // effective sample size
-    float lp;
+    double sqrt_het; // sqrt(2pq)
+    double sd;       // SE(beta) = 1 / (2pq) / N_eff
+    double ne;       // effective sample size
 } row_t;
 
 // GWAS-VCF fields
@@ -355,13 +402,13 @@ typedef struct {
 
 typedef struct {
     int imap; // map to the summary statistic sample number in the GWAS-VCF file
+    const char *seqname;
     int ld_block;
     double neff;
     double mean_neff;
     int row_ptr;
     int n_missing;
     int n_iter; // number of iterations required to perform precisionMultiply()
-    double trace;
 
     row_t *rows;
     int m_rows;
@@ -373,6 +420,11 @@ typedef struct {
     coo_matrix_t coo_schur[2][2];
     int m_schur_imap;
     int *schur_imap;
+
+    // statistics relevant across multiple LD blocks
+    double all_trace_inf;
+    int all_n_missing;
+    int all_n_non_missing;
 } ld_block_t;
 
 static inline void ld_block_clear(ld_block_t *block) {
@@ -462,8 +514,8 @@ static int read_ld_block(bcf_srs_t *sr, ld_block_t *blocks, int n_pops, double a
     float *float_arr = NULL;
     int n_float_arr, m_float_arr = 0;
 
-    bcf1_t *line;
-    bcf_hdr_t *hdr;
+    bcf1_t *line = NULL;
+    bcf_hdr_t *hdr = NULL;
     double *ez = (double *)malloc(sizeof(double) * n_pops);
     double *lp = (double *)malloc(sizeof(double) * n_pops);
     double *ne = (double *)malloc(sizeof(double) * n_pops);
@@ -479,7 +531,6 @@ static int read_ld_block(bcf_srs_t *sr, ld_block_t *blocks, int n_pops, double a
         ret += bcf_sr_has_line(sr, 1 + pop);
         ld_block_clear(&blocks[pop]);
     }
-    double exponent = (alpha_param + 1.0) / 2.0;
 
     do {
         // populate GWAS-VCF data in temporary structures if data available
@@ -551,7 +602,7 @@ static int read_ld_block(bcf_srs_t *sr, ld_block_t *blocks, int n_pops, double a
                       (bcf_sr_get_reader(sr, 1 + pop))->fname, bcf_seqname(hdr, line), (int64_t)line->pos + 1);
             af = (double)float_arr[0];
             n_int_arr = bcf_get_info_int32(hdr, line, "LD_block", &int_arr, &m_int_arr);
-            if (n_int_arr != 1 || int_arr[0] < blocks[pop].ld_block)
+            if (n_int_arr != 1)
                 error("Error: LD_block INFO field from file %s is nonconformal at %s:%" PRId64 "\n",
                       (bcf_sr_get_reader(sr, 1 + pop))->fname, bcf_seqname(hdr, line), (int64_t)line->pos + 1);
             ld_block = int_arr[0];
@@ -583,9 +634,8 @@ static int read_ld_block(bcf_srs_t *sr, ld_block_t *blocks, int n_pops, double a
 
             if (block_started && blocks[pop].ld_block == ld_block)
                 continue; // skip first line if the reader is still stuck on the previous LDGM
-            if (!block_started
-                && curr_ld_block
-                       < ld_block) { // skip line if the reader reached the next LDGM and stop reading more lines
+            // skip line if the reader reached the next LDGM and stop reading more lines
+            if (!block_started && curr_ld_block != ld_block) {
                 block_ended = 1;
                 continue;
             }
@@ -598,15 +648,14 @@ static int read_ld_block(bcf_srs_t *sr, ld_block_t *blocks, int n_pops, double a
             // if not already loaded, add LDGM-VCF entry
             row_t *row;
             if (block->node2row[ld_node] == 0) {
-                hts_expand(row_t, block->coo.n_rows + 1, block->m_rows, block->rows);
-                block->node2row[ld_node] = block->coo.n_rows + 1;
-                row = &block->rows[block->coo.n_rows];
+                hts_expand(row_t, block->coo.nrow + 1, block->m_rows, block->rows);
+                block->node2row[ld_node] = block->coo.nrow + 1;
+                row = &block->rows[block->coo.nrow];
 
                 row->ld_node = ld_node;
                 // flip the allele frequency if the alternate allele is the ancestral allele
-                row->af_deriv = aa ? 1.0f - af : af;
-                double heterozygosity = 2.0 * (double)af * (1.0 - (double)af);
-                row->sd = alpha_param == 0.0 ? sqrt(heterozygosity) : exp(exponent * heterozygosity);
+                row->sqrt_het = sqrt(2.0 * (double)af * (1.0 - (double)af));
+                row->sd = alpha_param == 0.0 ? row->sqrt_het : pow(row->sqrt_het, alpha_param + 1.0);
 
                 if (bcf_sr_has_line(sr, 0) && !isnan(ez[pop])) {
                     row->n_line = *n_lines + 1;
@@ -614,22 +663,20 @@ static int read_ld_block(bcf_srs_t *sr, ld_block_t *blocks, int n_pops, double a
                     // flip the Z-score if the alternate allele is the ancestral allele
                     row->ez_deriv = aa ? -ez[pop] : ez[pop];
                     row->ne = ne[pop];
-                    row->lp = lp[pop];
                 } else {
                     row->n_line = 0;
                     row->ez_deriv = NAN;
                     row->ne = NAN;
-                    row->lp = NAN;
                 }
 
-                append_diag(block->coo.n_rows, (double)ld_diagonal, &block->coo);
+                append_diag(block->coo.nrow, (double)ld_diagonal, &block->coo);
                 for (int i = 0; i < n_int_arr; i++) {
                     if (float_arr[i] == 0.0f)
                         continue; // there should not be need for this check once they fix the LDGM precision matrices
                     append_nnz(ld_node, int_arr[i], (double)float_arr[i], &block->coo);
                     append_nnz(int_arr[i], ld_node, (double)float_arr[i], &block->coo);
                 }
-                block->coo.n_rows++;
+                block->coo.nrow++;
             } else {
                 row = &block->rows[block->node2row[ld_node] - 1];
                 if (!row->n_line && bcf_sr_has_line(sr, 0) && !isnan(ez[pop])) {
@@ -638,13 +685,15 @@ static int read_ld_block(bcf_srs_t *sr, ld_block_t *blocks, int n_pops, double a
                     // flip the Z-score if the alternate allele is the ancestral allele
                     row->ez_deriv = aa ? -ez[pop] : ez[pop];
                     row->ne = ne[pop];
-                    row->lp = lp[pop];
                 }
             }
         }
         if (ret > bcf_sr_has_line(sr, 0)) {
             block_started = 0;
-            for (int pop = 0; pop < n_pops; pop++) blocks[pop].ld_block = curr_ld_block;
+            for (int pop = 0; pop < n_pops; pop++) {
+                blocks[pop].seqname = bcf_hdr_id2name(hdr, line->rid);
+                blocks[pop].ld_block = curr_ld_block;
+            }
         }
 
         // load GWAS-VCF data if it is references in any of the LDGM-VCF structures
@@ -663,12 +712,12 @@ static int read_ld_block(bcf_srs_t *sr, ld_block_t *blocks, int n_pops, double a
 
     for (int pop = 0; pop < n_pops; pop++) {
         ld_block_t *block = &blocks[pop];
-        block->row_ptr = pop == 0 ? 0 : blocks[pop - 1].row_ptr + blocks[pop - 1].coo.n_rows;
+        block->row_ptr = pop == 0 ? 0 : blocks[pop - 1].row_ptr + blocks[pop - 1].coo.nrow;
 
         // compute number of missing rows from the summary statistics and average sample size
         block->mean_neff = 0.0;
         int l = 0;
-        for (int k = 0; k < block->coo.n_rows; k++) {
+        for (int k = 0; k < block->coo.nrow; k++) {
             row_t *row = &block->rows[k];
             if (row->n_line == 0)
                 block->n_missing++;
@@ -678,6 +727,8 @@ static int read_ld_block(bcf_srs_t *sr, ld_block_t *blocks, int n_pops, double a
             }
         }
         block->mean_neff /= l;
+        block->all_n_missing += block->n_missing;
+        block->all_n_non_missing += block->coo.nrow - block->n_missing;
 
         // compress all LDGM edges so that they refer to rows rather than LD nodes
         for (int k = 0; k < block->coo.nnz; k++) {
@@ -704,10 +755,10 @@ static void schur_split(ld_block_t *block, csr_matrix_t schur[][2]) {
     int n0 = 0;
     int n1 = 0;
     const coo_matrix_t *coo = &block->coo;
-    hts_expand(int, coo->n_rows, block->m_schur_imap, block->schur_imap);
+    hts_expand(int, coo->nrow, block->m_schur_imap, block->schur_imap);
 
     // computes the sizes of P00 and P11 and add diagonal elements
-    for (int k = 0; k < coo->n_rows; k++) {
+    for (int k = 0; k < coo->nrow; k++) {
         block->schur_imap[k] = block->rows[k].n_line ? n1++ : n0++;
         if (k >= coo->m_d) break;
         int kk = block->rows[k].n_line > 0;
@@ -720,19 +771,19 @@ static void schur_split(ld_block_t *block, csr_matrix_t schur[][2]) {
         int j = coo->cell[k].j;
         int ii = block->rows[i].n_line > 0;
         int jj = block->rows[j].n_line > 0;
-        append_nnz(block->schur_imap[i], block->schur_imap[j], coo->cell[k].z, &block->coo_schur[ii][jj]);
+        append_nnz(block->schur_imap[i], block->schur_imap[j], coo->cell[k].x, &block->coo_schur[ii][jj]);
     }
 
     // convert P00, P01, P10, and P11 from COO to CSR representation
     for (int k = 0; k < 4; k++) {
-        block->coo_schur[k / 2][k % 2].n_rows = k < 2 ? n0 : n1;
+        block->coo_schur[k / 2][k % 2].nrow = k < 2 ? n0 : n1;
         coo_to_csr(&block->coo_schur[k / 2][k % 2], &schur[k / 2][k % 2]);
     }
 }
 
 static void make_sigma(ld_block_t *blocks, int n_pops, double beta_cov, double cross_corr, coo_matrix_t *out) {
     coo_clear(out);
-    out->n_rows = blocks[n_pops - 1].row_ptr + blocks[n_pops - 1].coo.n_rows;
+    out->nrow = blocks[n_pops - 1].row_ptr + blocks[n_pops - 1].coo.nrow;
 
     // compute the largest node number
     int n_ld_nodes = 0;
@@ -744,11 +795,10 @@ static void make_sigma(ld_block_t *blocks, int n_pops, double beta_cov, double c
     // fill diagonal elements by looping across all rows
     for (int pop = 0; pop < n_pops; pop++) {
         ld_block_t *block = &blocks[pop];
-        for (int k = 0; k < block->coo.n_rows; k++) {
+        for (int k = 0; k < block->coo.nrow; k++) {
             row_t *row = &block->rows[k];
             if (row->n_line == 0) continue;
             append_diag(block->row_ptr + k, beta_cov * row->sd * row->sd, out);
-            block->trace += beta_cov * row->sd * row->sd;
         }
     }
 
@@ -777,23 +827,21 @@ static void make_sigma(ld_block_t *blocks, int n_pops, double beta_cov, double c
 
 static void concatenate(const ld_block_t *blocks, int n_pops, coo_matrix_t *out) {
     coo_clear(out);
-    out->n_rows = blocks[n_pops - 1].row_ptr + blocks[n_pops - 1].coo.n_rows;
+    out->nrow = blocks[n_pops - 1].row_ptr + blocks[n_pops - 1].coo.nrow;
 
-    hts_expand0(double, out->n_rows, out->m_d, out->d);
+    hts_expand0(double, out->nrow, out->m_d, out->d);
     out->nnz = 0;
     for (int pop = 0; pop < n_pops; pop++) {
         const ld_block_t *block = &blocks[pop];
         const coo_matrix_t *coo = &block->coo;
-        memcpy(&out->d[block->row_ptr], coo->d, sizeof(double) * (coo->n_rows > coo->m_d ? coo->m_d : coo->n_rows));
+        memcpy(&out->d[block->row_ptr], coo->d, sizeof(double) * (coo->nrow > coo->m_d ? coo->m_d : coo->nrow));
         for (int k = 0; k < coo->nnz; k++)
-            append_nnz(block->row_ptr + coo->cell[k].i, block->row_ptr + coo->cell[k].j, coo->cell[k].z, out);
+            append_nnz(block->row_ptr + coo->cell[k].i, block->row_ptr + coo->cell[k].j, coo->cell[k].x, out);
     }
 }
 
 static void write_ld_block(htsFile *fh, bcf_hdr_t *hdr, line_t *lines, int n_lines, ld_block_t *blocks, int n_pops) {
     float *es_arr = (float *)malloc(sizeof(float) * n_pops);
-    float *lp_arr = (float *)malloc(sizeof(float) * n_pops);
-    float *af_arr = (float *)malloc(sizeof(float) * n_pops);
 
     for (int k = 0; k < n_lines; k++) {
         for (int pop = 0; pop < n_pops; pop++) {
@@ -804,26 +852,18 @@ static void write_ld_block(htsFile *fh, bcf_hdr_t *hdr, line_t *lines, int n_lin
                 || block->rows[block->node2row[lines[k].ld_node] - 1].n_line - 1 != k
                 || isnan(block->rows[block->node2row[lines[k].ld_node] - 1].ez_deriv)) {
                 bcf_float_set_missing(es_arr[pop]);
-                bcf_float_set_missing(lp_arr[pop]);
-                bcf_float_set_missing(af_arr[pop]);
             } else {
                 row_t *row = &block->rows[block->node2row[lines[k].ld_node] - 1];
                 double ez = lines[k].aa ? -row->ez_deriv : row->ez_deriv;
-                af_arr[pop] = lines[k].aa ? 1.0 - row->af_deriv : row->af_deriv;
                 es_arr[pop] = (float)ez;
-                lp_arr[pop] = row->lp;
             }
         }
         bcf_update_format_float(hdr, lines[k].line, id_str[ES], es_arr, n_pops);
-        bcf_update_format_float(hdr, lines[k].line, id_str[LP], lp_arr, n_pops);
-        bcf_update_format_float(hdr, lines[k].line, id_str[AF], af_arr, n_pops);
         if (bcf_write(fh, hdr, lines[k].line) < 0) error("Error: Unable to write to output VCF file\n");
         bcf_destroy(lines[k].line);
     }
 
     free(es_arr);
-    free(lp_arr);
-    free(af_arr);
 }
 
 /****************************************
@@ -835,22 +875,15 @@ const char *about(void) { return "Compute best linear unbiased predictor from GW
 static const char *usage_text(void) {
     return "\n"
            "About: Compute best linear unbiased predictor from GWAS-VCF summary statistics.\n"
-           "(version " BLUPX_VERSION
+           "(version " BLUP_VERSION
            " https://github.com/freeseek/score)\n"
            "[ Nowbandegani, P. S., Wohns, A. W., et al. Extremely sparse models of linkage disequilibrium in "
            "ancestrally\n"
            "diverse association studies. bioRxiv, (2022) https://doi.org/10.1101/2022.09.06.506858 ]\n"
            "\n"
-           "Usage: bcftools +blupx [options] <score.gwas.vcf.gz> [<ldgm.vcf.gz> <ldgm2.vcf.gz> ...]\n"
+           "Usage: bcftools +blup [options] <score.gwas.vcf.gz> [<ldgm.vcf.gz> <ldgm2.vcf.gz> ...]\n"
            "Plugin options:\n"
-           "   -b, --beta-cov                  frequency-dependent architecture parameter [1e-7]\n"
-           "   -x, --cross-corr                cross ancestry correlation parameter [0.9]\n"
-           "   -a, --alpha-param               alpha parameter [0]\n"
-           "       --tolerance <float>         Tolerance threshold for the conjugate gradient [1e-10]\n"
-           "       --no-jacobi                 Do not use Jacobi preconditioning when solving linear systems with "
-           "conjugate gradient\n"
-           "       --sample-sizes <list>       List of sample sizes for each input summary statistic [estimated from "
-           "NS/NC/NE fields]\n"
+           "   -v, --verbose                   verbose output\n"
            "       --ldgm-vcfs <list>          List of LDGM-VCF files to use\n"
            "       --ldgm-vcfs-file <file>     File of list of LDGM-VCF files to use\n"
            "   -e, --exclude EXPR              Exclude sites for which the expression is true (see man page for "
@@ -876,9 +909,22 @@ static const char *usage_text(void) {
            "(2) [0]\n"
            "       --threads <int>             use multithreading with INT worker threads [0]\n"
            "\n"
+           "Model options:\n"
+           "       --stats-only                only compute suggested summary options for a given alpha parameter\n"
+           "       --average-ld-score <float>  average LD score per marker [72.6]\n"
+           "   -a, --alpha-param <float>       alpha parameter [-0.5]\n"
+           "   -b, --beta-cov <float>          frequency-dependent architecture parameter [1e-7]\n"
+           "   -x, --cross-corr <float>        cross ancestry correlation parameter [0.9]\n"
+           "       --sample-sizes <list>       List of sample sizes for each input summary statistic [estimated from "
+           "NS/NC/NE fields]\n"
+           "\n"
+           "Linear algebra options:\n"
+           "       --tolerance <float>         Tolerance threshold for the conjugate gradient [1e-6]\n"
+           "       --no-jacobi                 Do not use Jacobi preconditioning when solving linear systems with "
+           "conjugate gradient\n"
+           "\n"
            "Examples:\n"
-           "      bcftools +blupx -Ob -o ukb.blup.bcf -b 2e-7 ukb.gwas.bcf 1kg_ldgm.EUR.bcf\n"
-           "      bcftools +blupx -Oz -o giant.blupx.vcf.gz giant.gwas.vcf.gz 1kg_ldgm.{AFR,EAS,EUR,AMR,SAS}.bcf\n"
+           "      bcftools +blup -Ob -o ukb.blup.bcf -b 2e-7 ukb.gwas.bcf 1kg_ldgm.EUR.bcf\n"
            "\n";
 }
 
@@ -894,11 +940,8 @@ static FILE *get_file_handle(const char *str) {
 }
 
 int run(int argc, char **argv) {
-    double beta_cov = 1e-7;
-    double cross_corr = 0.9;
-    double alpha_param = 0.0;
-    double tol = 1e-10;
-    int jacobi = 1;
+    double average_ld_score = AVERAGE_LD_SCORE_DFLT;
+    int verbose = 0;
     int n_sample_sizes = 0;
     char **sample_sizes = NULL;
     int n_files = 0;
@@ -913,6 +956,12 @@ int run(int argc, char **argv) {
     int targets_is_file = 0;
     int targets_overlap = 0;
     int n_threads = 0;
+    int stats_only = 0;
+    double alpha_param = -0.5;
+    double beta_cov = NAN;
+    double cross_corr = 0.9;
+    double tol = 1e-6;
+    int jacobi = 1;
     char *tmp = NULL;
     const char *output_fname = "-";
     const char *regions_list = NULL;
@@ -925,14 +974,9 @@ int run(int argc, char **argv) {
     bcf_sr_set_opt(sr, BCF_SR_REQUIRE_IDX);
     bcf_sr_set_opt(sr, BCF_SR_PAIR_LOGIC, BCF_SR_PAIR_EXACT);
 
-    static struct option loptions[] = {{"beta-cov", required_argument, NULL, 'b'},
-                                       {"cross-corr", required_argument, NULL, 'x'},
-                                       {"alpha-param", required_argument, NULL, 'a'},
-                                       {"tolerance", required_argument, NULL, 1},
-                                       {"no-jacobi", no_argument, NULL, 2},
-                                       {"sample-sizes", required_argument, NULL, 3},
-                                       {"ldgm-vcfs", required_argument, NULL, 4},
-                                       {"ldgm-vcfs-file", required_argument, NULL, 5},
+    static struct option loptions[] = {{"verbose", no_argument, NULL, 'v'},
+                                       {"ldgm-vcfs", required_argument, NULL, 1},
+                                       {"ldgm-vcfs-file", required_argument, NULL, 2},
                                        {"exclude", required_argument, NULL, 'e'},
                                        {"include", required_argument, NULL, 'i'},
                                        {"no-version", no_argument, NULL, 8},
@@ -941,47 +985,36 @@ int run(int argc, char **argv) {
                                        {"log", required_argument, NULL, 'l'},
                                        {"regions", required_argument, NULL, 'r'},
                                        {"regions-file", required_argument, NULL, 'R'},
-                                       {"regions-overlap", required_argument, NULL, 6},
+                                       {"regions-overlap", required_argument, NULL, 3},
                                        {"samples", required_argument, NULL, 's'},
                                        {"samples-file", required_argument, NULL, 'S'},
                                        {"targets", required_argument, NULL, 't'},
                                        {"targets-file", required_argument, NULL, 'T'},
-                                       {"targets-overlap", required_argument, NULL, 7},
+                                       {"targets-overlap", required_argument, NULL, 4},
                                        {"threads", required_argument, NULL, 9},
+                                       {"stats-only", no_argument, NULL, 5},
+                                       {"average-ld-score", required_argument, NULL, 6},
+                                       {"alpha-param", required_argument, NULL, 'a'},
+                                       {"beta-cov", required_argument, NULL, 'b'},
+                                       {"cross-corr", required_argument, NULL, 'x'},
+                                       {"sample-sizes", required_argument, NULL, 7},
+                                       {"tolerance", required_argument, NULL, 10},
+                                       {"no-jacobi", no_argument, NULL, 11},
                                        {NULL, 0, NULL, 0}};
     int c;
-    while ((c = getopt_long(argc, argv, "h?b:x:e:i:o:O:l:r:R:s:S:t:T:", loptions, NULL)) >= 0) {
+    while ((c = getopt_long(argc, argv, "h?ve:i:o:O:l:r:R:s:S:t:T:b:x:a:", loptions, NULL)) >= 0) {
         switch (c) {
-        case 'b':
-            beta_cov = strtod(optarg, &tmp);
-            if (*tmp) error("Could not parse: --beta-cov %s\n", optarg);
-            break;
-        case 'x':
-            cross_corr = strtod(optarg, &tmp);
-            if (*tmp) error("Could not parse: --cross-corr %s\n", optarg);
-            break;
-        case 'a':
-            alpha_param = strtod(optarg, &tmp);
-            if (*tmp) error("Could not parse: --alpha-param %s\n", optarg);
+        case 'v':
+            verbose++;
             break;
         case 1:
-            tol = strtod(optarg, &tmp);
-            if (*tmp) error("Could not parse: --tolerance %s\n", optarg);
-            break;
-        case 2:
-            jacobi = 0;
-            break;
-        case 3:
-            sample_sizes = hts_readlist(optarg, 0, &n_sample_sizes);
-            break;
-        case 4:
             if (filenames)
                 error(
                     "Error: only one --ldgm-vcfs or --ldgm-vcfs-file inputs can be given, and they cannot be "
                     "combined\n");
             filenames = hts_readlist(optarg, 0, &n_files);
             break;
-        case 5:
+        case 2:
             if (filenames)
                 error(
                     "Error: only one --ldgm-vcfs or --ldgm-vcfs-file inputs can be given, and they cannot be "
@@ -1039,7 +1072,7 @@ int run(int argc, char **argv) {
             regions_list = optarg;
             regions_is_file = 1;
             break;
-        case 6:
+        case 3:
             if (!strcasecmp(optarg, "0"))
                 regions_overlap = 0;
             else if (!strcasecmp(optarg, "1"))
@@ -1063,7 +1096,7 @@ int run(int argc, char **argv) {
             targets_list = optarg;
             targets_is_file = 1;
             break;
-        case 7:
+        case 4:
             if (!strcasecmp(optarg, "0"))
                 targets_overlap = 0;
             else if (!strcasecmp(optarg, "1"))
@@ -1076,6 +1109,36 @@ int run(int argc, char **argv) {
         case 9:
             n_threads = (int)strtol(optarg, &tmp, 10);
             if (*tmp) error("Could not parse: --threads %s\n", optarg);
+            break;
+        case 5:
+            stats_only = 1;
+            break;
+        case 6:
+            average_ld_score = strtod(optarg, &tmp);
+            if (*tmp) error("Could not parse: --average-ld-score %s\n", optarg);
+            break;
+        case 'a':
+            alpha_param = strtod(optarg, &tmp);
+            if (*tmp) error("Could not parse: --alpha-param %s\n", optarg);
+            if (alpha_param < -1 || alpha_param > 0) error("The alpha parameter must be a number between -1 and 0\n");
+            break;
+        case 'b':
+            beta_cov = strtod(optarg, &tmp);
+            if (*tmp) error("Could not parse: --beta-cov %s\n", optarg);
+            break;
+        case 'x':
+            cross_corr = strtod(optarg, &tmp);
+            if (*tmp) error("Could not parse: --cross-corr %s\n", optarg);
+            break;
+        case 7:
+            sample_sizes = hts_readlist(optarg, 0, &n_sample_sizes);
+            break;
+        case 10:
+            tol = strtod(optarg, &tmp);
+            if (*tmp) error("Could not parse: --tolerance %s\n", optarg);
+            break;
+        case 11:
+            jacobi = 0;
             break;
         case 'h':
         case '?':
@@ -1109,6 +1172,7 @@ int run(int argc, char **argv) {
 
     if (n_files == 0) {
         n_files = argc - optind - 1;
+        if (n_files == 0) error("No LDGM-VCF file was input\n");
         filenames = argv + optind + 1;
     }
 
@@ -1130,11 +1194,20 @@ int run(int argc, char **argv) {
         free(filenames);
     }
 
+    if (!stats_only && isnan(beta_cov)) {
+        fprintf(log_file, "Warning: --beta-cov option should be specified rather than using default value\n");
+        beta_cov = 1e-7;
+        fprintf(log_file, "Warning: use option --stats-only to first identify value for option --beta-cov\n");
+    }
+
     char wmode[8];
     set_wmode(wmode, output_type, output_fname, clevel);
-    htsFile *out_fh = hts_open(output_fname, wmode);
-    if (out_fh == NULL) error("Error: cannot write to \"%s\": %s\n", output_fname, strerror(errno));
-    if (n_threads) hts_set_opt(out_fh, HTS_OPT_THREAD_POOL, sr->p);
+    htsFile *out_fh = NULL;
+    if (!stats_only) {
+        out_fh = hts_open(output_fname, wmode);
+        if (out_fh == NULL) error("Error: cannot write to \"%s\": %s\n", output_fname, strerror(errno));
+        if (n_threads) hts_set_opt(out_fh, HTS_OPT_THREAD_POOL, sr->p);
+    }
 
     bcf_hdr_t *hdr = bcf_sr_get_header(sr, 0);
     if (bcf_hdr_nsamples(hdr) < n_files)
@@ -1164,29 +1237,27 @@ int run(int argc, char **argv) {
         free(samples);
     }
 
-    bcf_hdr_t *out_hdr = bcf_hdr_subset(hdr, 0, 0, 0);
-    bcf_hdr_remove(out_hdr, BCF_HL_FMT, NULL);
-    kstring_t str = {0, 0, NULL};
-    for (int i = 0; i < n_files; i++) {
-        str.l = 0;
-        ksprintf(&str, "%s_blup%g", hdr->samples[imap[i]], beta_cov);
-        bcf_hdr_add_sample(out_hdr, str.s);
-    }
-    free(str.s);
+    bcf_hdr_t *out_hdr = NULL;
+    if (!stats_only) {
+        out_hdr = bcf_hdr_subset(hdr, 0, 0, 0);
+        bcf_hdr_remove(out_hdr, BCF_HL_FMT, NULL);
+        kstring_t str = {0, 0, NULL};
+        for (int i = 0; i < n_files; i++) {
+            str.l = 0;
+            ksprintf(&str, n_files > 1 ? "%s_blupx_a%g_b%.2g" : "%s_blup_a%g_b%.2g", hdr->samples[imap[i]],
+                     0.0 - alpha_param, beta_cov);
+            bcf_hdr_add_sample(out_hdr, str.s);
+        }
+        free(str.s);
 
-    if (bcf_hdr_sync(out_hdr) < 0)
-        error_errno("[%s] Failed to update header", __func__); // updates the number of samples
-    if (bcf_hdr_printf(out_hdr, "##FORMAT=<ID=%s,Number=A,Type=Float,Description=\"%s\">", id_str[ES], desc_str[ES])
-        < 0)
-        error_errno("[%s] Failed to add \"%s\" FORMAT header", id_str[ES], __func__);
-    if (bcf_hdr_printf(out_hdr, "##FORMAT=<ID=%s,Number=A,Type=Float,Description=\"%s\">", id_str[LP], desc_str[LP])
-        < 0)
-        error_errno("[%s] Failed to add \"%s\" FORMAT header", id_str[LP], __func__);
-    if (bcf_hdr_printf(out_hdr, "##FORMAT=<ID=%s,Number=A,Type=Float,Description=\"%s\">", id_str[AF], desc_str[AF])
-        < 0)
-        error_errno("[%s] Failed to add \"%s\" FORMAT header", id_str[AF], __func__);
-    if (record_cmd_line) bcf_hdr_append_version(out_hdr, argc, argv, "bcftools_blup");
-    if (bcf_hdr_write(out_fh, out_hdr) < 0) error("Unable to write to output VCF file\n");
+        if (bcf_hdr_sync(out_hdr) < 0)
+            error_errno("[%s] Failed to update header", __func__); // updates the number of samples
+        if (bcf_hdr_printf(out_hdr, "##FORMAT=<ID=%s,Number=A,Type=Float,Description=\"%s\">", id_str[ES], desc_str[ES])
+            < 0)
+            error_errno("[%s] Failed to add \"%s\" FORMAT header", id_str[ES], __func__);
+        if (record_cmd_line) bcf_hdr_append_version(out_hdr, argc, argv, "bcftools_blup");
+        if (bcf_hdr_write(out_fh, out_hdr) < 0) error("Unable to write to output VCF file\n");
+    }
 
     double *alpha_hat_1 = NULL;
     int m_alpha_hat_1 = 0;
@@ -1194,10 +1265,18 @@ int run(int argc, char **argv) {
     int m_beta_hat_1 = 0;
     double *beta_hat = NULL;
     int m_beta_hat = 0;
-    double *beta_expectation = NULL;
-    int m_beta_expectation = 0;
+    double *beta_blup = NULL;
+    int m_beta_blup = 0;
 
-    fprintf(log_file, "BLUPx " BLUPX_VERSION " https://github.com/freeseek/score\n");
+    fprintf(log_file, "BLUP " BLUP_VERSION " https://github.com/freeseek/score BCFTOOLS %s HTSLIB %s\n",
+            bcftools_version(), hts_version());
+
+    if (!stats_only) {
+        fprintf(log_file, "=== PARAMETERS ===\n");
+        fprintf(log_file, "alpha: %.4g\n", alpha_param);
+        fprintf(log_file, "betaCov: %.4g\n", beta_cov);
+    }
+
     // allocate structures needed across ancestries
     ld_block_t *blocks = (ld_block_t *)calloc(sizeof(ld_block_t), n_files);
     for (int pop = 0; pop < n_files; pop++) {
@@ -1223,17 +1302,29 @@ int run(int argc, char **argv) {
     csr_matrix_t schur_P[2][2];
     csr_matrix_t S, S_P;
 
+    // compute statistics across LD blocks
+    int n_blocks = 0;
+    double *medians_alpha_hat2 = NULL;
+    int m_medians_alpha_hat2 = 0;
+    double *means_neff = NULL;
+    int m_means_neff = 0;
+
+    if (!stats_only && verbose) fprintf(log_file, "=== LD_BLOCKS ===\n");
+
     // see https://github.com/awohns/ldgm/blob/main/MATLAB/BLUPxldgm.m
     int ret;
     do {
         n_lines = 0;
         ret = read_ld_block(sr, blocks, n_files, alpha_param, &lines, &n_lines, &m_lines, filter, filter_logic);
+        if (stats_only || !verbose) fprintf(log_file, "\33[2K\r%s ld_block=%d", blocks[0].seqname, blocks[0].ld_block);
 
-        int n_rows = blocks[n_files - 1].row_ptr + blocks[n_files - 1].coo.n_rows;
-        hts_expand(double, n_rows, m_alpha_hat_1, alpha_hat_1);
-        hts_expand(double, n_rows, m_beta_hat_1, beta_hat_1);
-        hts_expand(double, n_rows, m_beta_hat, beta_hat);
-        hts_expand(double, n_rows, m_beta_expectation, beta_expectation);
+        int nrow = blocks[n_files - 1].row_ptr + blocks[n_files - 1].coo.nrow;
+        hts_expand(double, nrow, m_alpha_hat_1, alpha_hat_1);
+        hts_expand(double, nrow, m_beta_hat_1, beta_hat_1);
+        hts_expand(double, nrow, m_beta_hat, beta_hat);
+        hts_expand(double, nrow, m_beta_blup, beta_blup);
+        hts_expand(double, (n_blocks + 1) * n_files, m_medians_alpha_hat2, medians_alpha_hat2);
+        hts_expand(double, (n_blocks + 1) * n_files, m_means_neff, means_neff);
 
         for (int pop = 0; pop < n_files; pop++) {
             ld_block_t *block = &blocks[pop];
@@ -1242,11 +1333,19 @@ int run(int argc, char **argv) {
             schur_split(block, schur_P);
 
             // import data vector from LD block structure
-            for (int k = 0, l = 0; k < block->coo.n_rows; k++) {
+            int l = 0;
+            for (int k = 0; k < block->coo.nrow; k++) {
                 row_t *row = &block->rows[k];
                 if (row->n_line == 0) continue;
+                block->all_trace_inf += row->sd * row->sd;
                 alpha_hat_1[block->row_ptr + l] = row->ez_deriv / sqrt(row->ne);
                 l++;
+            }
+            medians_alpha_hat2[n_blocks * n_files + pop] = get_median2(&alpha_hat_1[block->row_ptr], l, 1);
+            means_neff[n_blocks * n_files + pop] = block->mean_neff;
+            if (stats_only) {
+                for (int k = 0; k < 4; k++) csr_destroy(&schur_P[k / 2][k % 2]);
+                continue;
             }
 
             // run precisionMultiply()
@@ -1256,12 +1355,21 @@ int run(int argc, char **argv) {
 
             // divide precision matrix by n
             matdiv(&block->coo, block->mean_neff);
+
+            if (verbose)
+                fprintf(log_file, "%s neff=%.0f nnz=%d rows=%d missing=%d cg_multiply=%d\n", hdr->samples[block->imap],
+                        block->mean_neff, block->coo.nnz, block->coo.nrow, block->n_missing, block->n_iter);
+        }
+        if (stats_only) {
+            for (int k = 0; k < n_lines; k++) bcf_destroy(lines[k].line);
+            n_blocks++;
+            continue;
         }
 
         // concatenate data vector
         for (int pop = 0; pop < n_files; pop++) {
             ld_block_t *block = &blocks[pop];
-            for (int k = 0, l = 0; k < block->coo.n_rows; k++) {
+            for (int k = 0, l = 0; k < block->coo.nrow; k++) {
                 row_t *row = &block->rows[k];
                 if (row->n_line == 0)
                     beta_hat[block->row_ptr + k] = 0.0;
@@ -1286,52 +1394,69 @@ int run(int argc, char **argv) {
         csr_destroy(&S_P);
 
         // multiply by sigma
-        matvec(&S, beta_hat, beta_expectation);
+        sdmult(&S, beta_hat, beta_blup);
         csr_destroy(&S);
 
         // export data vector into LD block structure
         for (int pop = 0; pop < n_files; pop++) {
             ld_block_t *block = &blocks[pop];
-            for (int k = 0; k < block->coo.n_rows; k++) {
+            for (int k = 0; k < block->coo.nrow; k++) {
                 row_t *row = &block->rows[k];
                 if (row->n_line == 0) continue;
-                row->ez_deriv = beta_expectation[block->row_ptr + k] / row->sd * sqrt(block->mean_neff);
+                row->ez_deriv = beta_blup[block->row_ptr + k] / row->sqrt_het;
             }
         }
 
-        // print LD block logs
-        for (int pop = 0; pop < n_files; pop++) {
-            ld_block_t *block = &blocks[pop];
-            fprintf(log_file, "pop=%s neff=%.0f nnz=%d rows=%d missing=%d cg_multiply=%d\n", hdr->samples[block->imap],
-                    block->mean_neff, block->coo.nnz, block->coo.n_rows, block->n_missing, block->n_iter);
-        }
-        fprintf(log_file, "ld_block=%d rows=%d cg_divide=%d\n", blocks[0].ld_block, coo_P.n_rows, n_iter);
+        if (verbose)
+            fprintf(log_file, "%s ld_block=%d rows=%d cg_divide=%d\n", blocks[0].seqname, blocks[0].ld_block,
+                    coo_P.nrow, n_iter);
 
         // write BLUP GWAS-VCF files
         write_ld_block(out_fh, out_hdr, lines, n_lines, blocks, n_files);
+        n_blocks++;
     } while (ret);
+
+    fprintf(log_file, "\33[2K\r=== SUMMARY ===\n");
+
     // print trace(Sigma) estimate
-    for (int pop = 0; pop < n_files; pop++)
-        fprintf(log_file, "pop=%s ldgm=%s Trace(Sigma)=%g\n", hdr->samples[blocks[pop].imap],
-                (bcf_sr_get_reader(sr, 1 + pop))->fname, blocks[pop].trace);
+    for (int pop = 0; pop < n_files; pop++) {
+        ld_block_t *block = &blocks[pop];
+        double median_alpha_hat2 = get_median(&medians_alpha_hat2[pop], n_blocks, n_files);
+        double sample_size = get_median(&means_neff[pop], n_blocks, n_files);
+        double lambda_GC = sample_size * median_alpha_hat2 / MEDIAN_CHISQ;
+        double proportion_non_missing =
+            (double)block->all_n_non_missing / (double)(block->all_n_non_missing + block->all_n_missing);
+        double sigmasq_inf = (lambda_GC - 1.0) / (sample_size * average_ld_score * proportion_non_missing);
+        if (sigmasq_inf < 0.0) sigmasq_inf = 0.0;
+        const char *fname = (bcf_sr_get_reader(sr, 1 + pop))->fname;
+        fprintf(log_file, "%s %s non_missing=%d missing=%d lambda_GC=%.4f sigmasqInf=%.4g\n", hdr->samples[block->imap],
+                strrchr(fname, '/') ? strrchr(fname, '/') + 1 : fname, block->all_n_non_missing, block->all_n_missing,
+                lambda_GC, sigmasq_inf);
+        if (!stats_only) fprintf(log_file, "Tr(S_inf)=%g\n", block->all_trace_inf * beta_cov);
+        double meanPerSNPh2 = block->all_trace_inf / (double)block->all_n_non_missing;
+        fprintf(log_file, "Advised options: --alpha-param %.4f --beta-cov %.4g\n", alpha_param,
+                sigmasq_inf / meanPerSNPh2);
+    }
 
-    if (log_file != stdout && log_file != stderr) fclose(log_file);
-
+    free(medians_alpha_hat2);
+    free(means_neff);
     free(alpha_hat_1);
     free(beta_hat_1);
     free(beta_hat);
-    free(beta_expectation);
-
+    free(beta_blup);
     for (int pop = 0; pop < n_files; pop++) ld_block_destroy(&blocks[pop]);
     free(blocks);
     free(lines);
-
     coo_destroy(&coo_S);
     coo_destroy(&coo_P);
 
     if (filter) filter_destroy(filter);
-    if (hts_close(out_fh) < 0) error("Close failed: %s\n", out_fh->fn);
-    bcf_hdr_destroy(out_hdr);
+    if (!stats_only) {
+        if (hts_close(out_fh) < 0) error("Close failed: %s\n", out_fh->fn);
+        bcf_hdr_destroy(out_hdr);
+    }
     bcf_sr_destroy(sr);
+    if (log_file != stdout && log_file != stderr) fclose(log_file);
+
     return 0;
 }

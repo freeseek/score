@@ -1,6 +1,6 @@
 /* The MIT License
 
-   Copyright (C) 2021-2022 Giulio Genovese
+   Copyright (C) 2021-2023 Giulio Genovese
 
    Author: Giulio Genovese <giulio.genovese@gmail.com>
 
@@ -26,7 +26,6 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <sys/stat.h>
 #include <dirent.h>
 #include <getopt.h>
 #include <htslib/khash_str2int.h>
@@ -37,7 +36,7 @@
 #include "filter.h"
 #include "score.h"
 
-#define SCORE_VERSION "2022-12-21"
+#define SCORE_VERSION "2023-09-19"
 
 #define FLT_INCLUDE (1 << 0)
 #define FLT_EXCLUDE (1 << 1)
@@ -74,10 +73,8 @@ static inline int is_missing(float f) { return isnan(f) || bcf_float_is_missing(
 
 static inline char **get_file_list(const char *pathname, int *nfiles) {
     char **filenames = NULL;
-    struct stat statbuf;
-    if (stat(pathname, &statbuf) < 0) error("Can't open \"%s\": %s\n", pathname, strerror(errno));
-    if (S_ISDIR(statbuf.st_mode)) {
-        DIR *d = opendir(pathname);
+    DIR *d = opendir(pathname);
+    if (d) { // check if d is a directory
         struct dirent *dir;
         *nfiles = 0;
         int mfiles = 0;
@@ -140,30 +137,30 @@ static int tsv_read_allele(tsv_t *tsv, bcf1_t *rec, void *usr) {
     return 0;
 }
 
-static const int (*tsv_setters[])(tsv_t *tsv, bcf1_t *rec, void *usr) = {tsv_setter_id_flexible,         // SNP
-                                                                         tsv_setter_pos_flexible,        // BP
-                                                                         tsv_setter_chrom_flexible,      // CHR
-                                                                         tsv_read_allele,                // A1
-                                                                         NULL,                           // A2
-                                                                         tsv_read_float_and_minus_log10, // P
-                                                                         NULL,                           // Z
-                                                                         tsv_read_float_and_log,         // OR
-                                                                         tsv_read_float,                 // BETA
-                                                                         NULL,                           // N
-                                                                         NULL,                           // N_CAS
-                                                                         NULL,                           // N_CON
-                                                                         NULL,                           // INFO
-                                                                         NULL,                           // FRQ
-                                                                         NULL,                           // A0
-                                                                         NULL,                           // SE
-                                                                         NULL,                           // LP
-                                                                         NULL,                           // AC
-                                                                         NULL,                           // NEFF
-                                                                         NULL,                           // NEFFDIV2
-                                                                         NULL,                           // NET_I2
-                                                                         NULL,                           // HET_P
-                                                                         NULL,                           // HET_LP
-                                                                         NULL};                          // DIRE
+static int (*tsv_setters[])(tsv_t *tsv, bcf1_t *rec, void *usr) = {tsv_setter_id_flexible,         // SNP
+                                                                   tsv_setter_pos_flexible,        // BP
+                                                                   tsv_setter_chrom_flexible,      // CHR
+                                                                   tsv_read_allele,                // A1
+                                                                   NULL,                           // A2
+                                                                   tsv_read_float_and_minus_log10, // P
+                                                                   NULL,                           // Z
+                                                                   tsv_read_float_and_log,         // OR
+                                                                   tsv_read_float,                 // BETA
+                                                                   NULL,                           // N
+                                                                   NULL,                           // N_CAS
+                                                                   NULL,                           // N_CON
+                                                                   NULL,                           // INFO
+                                                                   NULL,                           // FRQ
+                                                                   NULL,                           // A0
+                                                                   NULL,                           // SE
+                                                                   NULL,                           // LP
+                                                                   NULL,                           // AC
+                                                                   NULL,                           // NEFF
+                                                                   NULL,                           // NEFFDIV2
+                                                                   NULL,                           // NET_I2
+                                                                   NULL,                           // HET_P
+                                                                   NULL,                           // HET_LP
+                                                                   NULL};                          // DIRE
 
 /****************************************
  * PGS FILE IMPLEMENTATION              *
@@ -865,8 +862,15 @@ int run(int argc, char **argv) {
                 if (bcf_gt_is_missing(ptr[0]) || bcf_gt_is_missing(ptr[1])) {
                     missing[k] = 1;
                 } else {
-                    aps[bcf_gt_allele(ptr[0]) * n_smpls + k]++;
-                    aps[bcf_gt_allele(ptr[1]) * n_smpls + k]++;
+                    size_t allele;
+                    if (ptr[0] != bcf_int32_vector_end) {
+                        allele = bcf_gt_allele(ptr[0]);
+                        if (allele < line->n_allele) aps[allele * n_smpls + k]++;
+                    }
+                    if (ptr[1] != bcf_int32_vector_end) {
+                        allele = bcf_gt_allele(ptr[1]);
+                        if (allele < line->n_allele) aps[allele * n_smpls + k]++;
+                    }
                 }
             }
             break;

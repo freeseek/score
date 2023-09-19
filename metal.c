@@ -1,6 +1,6 @@
 /* The MIT License
 
-   Copyright (C) 2022 Giulio Genovese
+   Copyright (C) 2022-2023 Giulio Genovese
 
    Author: Giulio Genovese <giulio.genovese@gmail.com>
 
@@ -33,7 +33,7 @@
 #include "bcftools.h"
 #include "filter.h"
 
-#define METAL_VERSION "2022-12-21"
+#define METAL_VERSION "2023-09-19"
 
 // Logic of the filters: include or exclude sites which match the filters?
 #define FLT_INCLUDE 1
@@ -143,6 +143,8 @@ static double log_ndist(double z) {
     return (-xsq * ldexp(xsq, -1)) - ldexp(del, -1) + log(temp);
 }
 
+#define M_2PI 6.283185307179586476925286766559 /* 2*pi */
+
 // Wichura, M. J. Algorithm AS 241: The Percentage Points of the Normal Distribution. Applied Statistics 37, 477 (1988).
 // https://doi.org/10.2307/2347330 PPND16 function (algorithm AS241) http://lib.stat.cmu.edu/apstat/241
 // see qnorm5() in https://github.com/wch/r-source/blob/trunk/src/nmath/qnorm.c
@@ -203,16 +205,33 @@ static double inv_log_ndist(double log_p) {
                / (((((((b7 * r + b6) * r + b5) * r + b4) * r + b3) * r + b2) * r + b1) * r + 1.0);
     }
     r = q < 0 ? sqrt(-log_p) : sqrt(-log(1.0 - p));
-    if (r <= 5.0) {
+    if (r <= 5.0) { // for p >= 1.389e−11
         r -= 1.6;
         x = (((((((c7 * r + c6) * r + c5) * r + c4) * r + c3) * r + c2) * r + c1) * r + c0)
             / (((((((d7 * r + d6) * r + d5) * r + d4) * r + d3) * r + d2) * r + d1) * r + 1.0);
-    } else if (r < 816) {
+    } else if (r <= 27) { // for p >= 2.51e-317
         r -= 5.0;
         x = (((((((e7 * r + e6) * r + e5) * r + e4) * r + e3) * r + e2) * r + e1) * r + e0)
             / (((((((f7 * r + f6) * r + f5) * r + f4) * r + f3) * r + f2) * r + f1) * r + 1.0);
+    } else if (r < 6.4e8) {               // improvement from Martin Maechler
+        double s2 = -2 * log_p;           // = -2*lp = 2s
+        double x2 = s2 - log(M_2PI * s2); // = xs_1
+        if (r < 36000) {
+            x2 = s2 - log(M_2PI * x2) - 2 / (2 + x2);                                  // == xs_2
+            if (r < 840) {                                                             // 27 < r < 840
+                x2 = s2 - log(M_2PI * x2) + 2 * log1p(-(1 - 1 / (4 + x2)) / (2 + x2)); // == xs_3
+                if (r < 109) {                                                         // 27 < r < 109
+                    x2 = s2 - log(M_2PI * x2) + 2 * log1p(-(1 - (1 - 5 / (6 + x2)) / (4 + x2)) / (2 + x2)); // == xs_4
+                    if (r < 55) { // 27 < r < 55
+                        x2 = s2 - log(M_2PI * x2)
+                             + 2 * log1p(-(1 - (1 - (5 - 9 / (8 + x2)) / (6 + x2)) / (4 + x2)) / (2 + x2)); // == xs_5
+                    }
+                }
+            }
+        }
+        x = sqrt(x2);
     } else {
-        return r * M_SQRT2; // improvement from Ross Ihaka?
+        return r * M_SQRT2;
     }
     return q < 0 ? -x : x;
 }
@@ -659,7 +678,7 @@ int run(int argc, char **argv) {
 
         for (int i = 0; i < SIZE * n_smpl; i++) bcf_float_set_missing(val_arr[i]);
         if (esd)
-            for (int i = 0; i < n_files * n_smpl; i++) esd_arr[i] = '?';
+            for (int i = 0; i < n_files * n_smpl; i++) esd_arr[i] = bcf_str_vector_end;
 
         for (int i = 0; i < n_smpl; i++) {
             double xnum = 0.0;
@@ -716,13 +735,13 @@ int run(int argc, char **argv) {
                     }
                     xnum += val[EZ] * sqrt(wt);
                     cq_sum += val[EZ] * val[EZ];
-                    esd_arr[n_files * i + j] = val[EZ] == 0.0 ? '0' : (val[EZ] > 0.0 ? '+' : '-');
+                    esd_arr[n_files * i + k] = val[EZ] == 0.0 ? '0' : (val[EZ] > 0.0 ? '+' : '-');
                 } else { // inverse-variance weighted scheme
                     if (isnan(val[ES]) || isnan(val[SE])) continue;
                     wt = 1.0 / (val[SE] * val[SE]);
                     xnum += val[ES] * wt;
                     cq_sum += val[ES] * val[ES] * wt;
-                    esd_arr[n_files * i + j] = val[ES] == 0.0 ? '0' : (val[ES] > 0.0 ? '+' : '-');
+                    esd_arr[n_files * i + k] = val[ES] == 0.0 ? '0' : (val[ES] > 0.0 ? '+' : '-');
                 }
 
                 xden += wt;
@@ -734,6 +753,11 @@ int run(int argc, char **argv) {
 
                 if (line->d.id[0] != '.' || line->d.id[1]) bcf_add_id(NULL, out_line, line->d.id);
                 df++;
+            }
+
+            if (esd) { // no effect size direction for phenotypes with only one study
+                if (df <= 0) esd_arr[n_files * i] = bcf_str_missing;
+                for (int k = df > 0 ? df + 1 : 1; k < n_files; k++) esd_arr[n_files * i + k] = bcf_str_vector_end;
             }
 
             if (df < 0) continue;
@@ -750,6 +774,7 @@ int run(int argc, char **argv) {
             val_arr[n_smpl * AF + i] = (float)(af_sum / xden);
             val_arr[n_smpl * AC + i] = (float)ac_sum;
             val_arr[n_smpl * NE + i] = (float)ne_sum;
+
             if (het && df) { // Cochran's Q test
                 cq_sum -= xnum * xnum / xden;
                 val_arr[n_smpl * I2 + i] = (float)(cq_sum < (double)df ? 0.0 : (cq_sum - (double)df) / cq_sum * 100.0);

@@ -1,6 +1,6 @@
 /* The MIT License
 
-   Copyright (C) 2022 Giulio Genovese
+   Copyright (C) 2022-2023 Giulio Genovese
 
    Author: Giulio Genovese <giulio.genovese@gmail.com>
 
@@ -35,9 +35,10 @@
 #include "bcftools.h"
 #include "score.h"
 
-#define MUNGE_VERSION "2022-12-21"
+#define MUNGE_VERSION "2023-09-19"
 
 #define IFFY_TAG "IFFY"
+#define MISMATCH_TAG "REF_MISMATCH"
 
 // https://github.com/MRCIEU/gwas-vcf-specification
 #define NS 0
@@ -120,30 +121,30 @@ int tsv_read_string(tsv_t *tsv, bcf1_t *rec, void *usr) {
     return 0;
 }
 
-static const int (*tsv_setters[])(tsv_t *tsv, bcf1_t *rec, void *usr) = {tsv_setter_id_flexible,         // SNP
-                                                                         tsv_setter_pos_flexible,        // BP
-                                                                         tsv_setter_chrom_flexible,      // CHR
-                                                                         tsv_read_allele,                // A1
-                                                                         tsv_read_allele,                // A2
-                                                                         tsv_read_float_and_minus_log10, // P
-                                                                         tsv_read_float,                 // Z
-                                                                         tsv_read_float_and_log,         // OR
-                                                                         tsv_read_float,                 // BETA
-                                                                         tsv_read_float,                 // N
-                                                                         tsv_read_float,                 // N_CAS
-                                                                         tsv_read_float,                 // N_CON
-                                                                         tsv_read_float,                 // INFO
-                                                                         tsv_read_float,                 // FRQ
-                                                                         tsv_read_allele,                // A0
-                                                                         tsv_read_float,                 // SE
-                                                                         tsv_read_float,                 // LP
-                                                                         tsv_read_float,                 // AC
-                                                                         tsv_read_float,                 // NEFF
-                                                                         tsv_read_float_and_mult_two,    // NEFFDIV2
-                                                                         tsv_read_float,                 // NET_I2
-                                                                         tsv_read_float,                 // HET_P
-                                                                         tsv_read_float_and_minus_log10, // HET_LP
-                                                                         tsv_read_string};               // DIRE
+static int (*tsv_setters[])(tsv_t *tsv, bcf1_t *rec, void *usr) = {tsv_setter_id_flexible,         // SNP
+                                                                   tsv_setter_pos_flexible,        // BP
+                                                                   tsv_setter_chrom_flexible,      // CHR
+                                                                   tsv_read_allele,                // A1
+                                                                   tsv_read_allele,                // A2
+                                                                   tsv_read_float_and_minus_log10, // P
+                                                                   tsv_read_float,                 // Z
+                                                                   tsv_read_float_and_log,         // OR
+                                                                   tsv_read_float,                 // BETA
+                                                                   tsv_read_float,                 // N
+                                                                   tsv_read_float,                 // N_CAS
+                                                                   tsv_read_float,                 // N_CON
+                                                                   tsv_read_float,                 // INFO
+                                                                   tsv_read_float,                 // FRQ
+                                                                   tsv_read_allele,                // A0
+                                                                   tsv_read_float,                 // SE
+                                                                   tsv_read_float,                 // LP
+                                                                   tsv_read_float,                 // AC
+                                                                   tsv_read_float,                 // NEFF
+                                                                   tsv_read_float_and_mult_two,    // NEFFDIV2
+                                                                   tsv_read_float,                 // NET_I2
+                                                                   tsv_read_float_and_minus_log10, // HET_P
+                                                                   tsv_read_float,                 // HET_LP
+                                                                   tsv_read_string};               // DIRE
 
 /****************************************
  * PLUGIN                               *
@@ -168,6 +169,9 @@ static const char *usage_text(void) {
            "       --iffy-tag <string>         FILTER annotation tag to record whether reference allele could not be "
            "determined [" IFFY_TAG
            "]\n"
+           "       --mismatch-tag <string>     FILTER annotation tag to record whether reference does not match any "
+           "allele [" MISMATCH_TAG
+           "]\n"
            "   -s, --sample-name <string>      sample name for the phenotype [SAMPLE]\n"
            "       --ns <float>                number of samples\n"
            "       --nc <float>                number of cases\n"
@@ -188,6 +192,7 @@ static const char *usage_text(void) {
 int run(int argc, char **argv) {
     float ns = 0.0f;
     float nc = 0.0f;
+    float ne = 0.0f;
     int cache_size = 0;
     int record_cmd_line = 1;
     int output_type = FT_VCF;
@@ -199,6 +204,7 @@ int run(int argc, char **argv) {
     const char *ref_fname = NULL;
     const char *fai_fname = NULL;
     const char *iffy_tag = IFFY_TAG;
+    const char *mismatch_tag = MISMATCH_TAG;
     const char *sample = "SAMPLE";
     const char *output_fname = "-";
     faidx_t *fai;
@@ -210,9 +216,11 @@ int run(int argc, char **argv) {
                                        {"fai", required_argument, NULL, 1},
                                        {"set-cache-size", required_argument, NULL, 2},
                                        {"iffy-tag", required_argument, NULL, 3},
+                                       {"mismatch-tag", required_argument, NULL, 4},
                                        {"sample-name", required_argument, NULL, 's'},
-                                       {"ns", required_argument, NULL, 4},
-                                       {"nc", required_argument, NULL, 5},
+                                       {"ns", required_argument, NULL, 5},
+                                       {"nc", required_argument, NULL, 6},
+                                       {"ne", required_argument, NULL, 7},
                                        {"no-version", no_argument, NULL, 8},
                                        {"output", required_argument, NULL, 'o'},
                                        {"output-type", required_argument, NULL, 'O'},
@@ -240,16 +248,23 @@ int run(int argc, char **argv) {
         case 3:
             iffy_tag = optarg;
             break;
+        case 4:
+            mismatch_tag = optarg;
+            break;
         case 's':
             sample = optarg;
             break;
-        case 4:
+        case 5:
             ns = strtof(optarg, &tmp);
             if (*tmp) error("Could not parse: --ns %s\n", optarg);
             break;
-        case 5:
+        case 6:
             nc = strtof(optarg, &tmp);
             if (*tmp) error("Could not parse: --nc %s\n", optarg);
+            break;
+        case 7:
+            ne = strtof(optarg, &tmp);
+            if (*tmp) error("Could not parse: --ne %s\n", optarg);
             break;
         case 8:
             record_cmd_line = 0;
@@ -326,6 +341,9 @@ int run(int argc, char **argv) {
     if (bcf_hdr_printf(hdr, "##FILTER=<ID=%s,Description=\"Reference allele could not be determined\">", iffy_tag) < 0)
         error_errno("Failed to add \"%s\" FILTER header", iffy_tag);
     int iffy_id = bcf_hdr_id2int(hdr, BCF_DT_ID, iffy_tag);
+    if (bcf_hdr_printf(hdr, "##FILTER=<ID=%s,Description=\"Reference does not match any allele\">", mismatch_tag) < 0)
+        error_errno("Failed to add \"%s\" FILTER header", mismatch_tag);
+    int mismatch_id = bcf_hdr_id2int(hdr, BCF_DT_ID, mismatch_tag);
 
     if ((!columns_preset && !columns_fname) || (columns_preset && columns_fname))
         error("Error: one of --columns or --columns-file should be given, not both\n%s", usage_text());
@@ -356,14 +374,14 @@ int run(int argc, char **argv) {
         if (ptr2 > ptr + 1 && (isspace(*ptr2) || *ptr2 == '\0')) {
             memmove(ptr, ptr2, str.l - (ptr2 - str.s));
             str.l -= ptr2 - ptr;
+            str.s[str.l] = '\0';
         }
         ptr = strchr(ptr + 1, '_');
     }
-    str.s[str.l] = '\0';
 
-    // some formats are tab-delimited and some formats (e.g. PLINK and SBayesR)
-    // are not here we make a determination based on the first header row
-    char delimiter = strchr(str.s, '\t') ? '\t' : '\0';
+    // some formats are tab-delimited, some are comma-separated, and some formats (e.g. PLINK and SBayesR) are not here
+    // we make a determination based on the first header row
+    char delimiter = strchr(str.s, '\t') ? '\t' : strchr(str.s, ',') ? ',' : '\0';
     kstring_t alleles[2] = {{0, 0, NULL}, {0, 0, NULL}};
     kstring_t esd_str = {0, 0, NULL};
     tsv_t *tsv = tsv_init_delimiter(str.s, delimiter);
@@ -549,6 +567,7 @@ int run(int argc, char **argv) {
         esd_str.l = 0;
         if (ns) val[NS] = ns;
         if (nc) val[NC] = nc;
+        if (ne) val[NE] = ne;
         if (tsv_parse_delimiter(tsv, rec, str.s, delimiter) < 0) error("Could not parse line: %s\n", str.s);
         if (rec->rid < 0) {
             fprintf(stderr, "Warning: could not convert record\n%s\n", str.s);
@@ -572,8 +591,10 @@ int run(int argc, char **argv) {
                 val[ES] = -val[ES];
                 val[AF] = 1.0f - val[AF];
                 val[AC] = 2.0f * val[NS] - val[AC];
-            } else if (ref_match == alt_match) {
+            } else if (ref_match && alt_match) {
                 bcf_update_filter(hdr, rec, &iffy_id, 1);
+            } else if (!ref_match && !alt_match) {
+                bcf_update_filter(hdr, rec, &mismatch_id, 1);
             }
             free(ref);
         }
