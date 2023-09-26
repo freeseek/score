@@ -306,9 +306,7 @@ Download and compile plugins code (make sure you are using gcc version 5 or newe
 ```
 cd bcftools-1.18/
 /bin/rm -f plugins/{score.{c,h},{munge,liftover,metal,blup}.c,pgs.{c,mk}}
-# wget -P plugins https://raw.githubusercontent.com/freeseek/score/master/{score.{c,h},{munge,liftover,metal,blup}.c,pgs.{c,mk}}
-# for now use this instead:
-wget http://software.broadinstitute.org/software/score/score_1.17-dev.tar.gz && tar xzvf score_1.17-dev.tar.gz -C plugins/
+wget -P plugins https://raw.githubusercontent.com/freeseek/score/master/{score.{c,h},{munge,liftover,metal,blup}.c,pgs.{c,mk}}
 make
 /bin/cp bcftools plugins/{munge,liftover,score,metal,pgs,blup}.so $HOME/bin/
 wget -P $HOME/bin https://raw.githubusercontent.com/freeseek/score/master/assoc_plot.R

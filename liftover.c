@@ -36,7 +36,7 @@
 #include "htslib/khash.h" // required to reset the contigs dictionary and table
 KHASH_MAP_INIT_STR(vdict, bcf_idinfo_t)
 
-#define LIFTOVER_VERSION "2023-09-19"
+#define LIFTOVER_VERSION "2023-09-26"
 
 #define FLIP_TAG "FLIP"
 #define SWAP_TAG "SWAP"
@@ -361,10 +361,12 @@ static regidx_t *regidx_init_chains(const bcf_hdr_t *in_hdr, const chain_t *chai
         if (chain->t_rid < 0 || chain->q_rid < 0) continue;
 
         // check whether the chain has already been added as Ensembl duplicates chains in the chain file
-        khiter_t k = kh_get(32, h, chain->id);
-        int ret, is_missing = (k == kh_end(h));
-        if (!is_missing) continue;
-        kh_put(32, h, chain->id, &ret);
+        if (chain->id) {
+            khiter_t k = kh_get(32, h, chain->id);
+            int ret, is_missing = (k == kh_end(h));
+            if (!is_missing) continue;
+            kh_put(32, h, chain->id, &ret);
+        }
 
         const char *name = bcf_hdr_id2name(in_hdr, chain->t_rid);
         int len = strlen(name);
@@ -1127,6 +1129,12 @@ static void extend_alleles(bcf1_realign_t *this) {
     bcf1_t *rec = this->rec;
     initialize_alleles(this);
 
+    // covers weird ClinVar cases
+    if (rec->n_allele == 1 && this->als[0].l == 1) {
+        pad_right(this, 1);
+        pad_left(this, 1);
+    }
+
     // find allele pairs that need to be extended
     for (int i = 0; i < rec->n_allele; i++) {
         for (int j = i + 1; j < rec->n_allele; j++) {
@@ -1156,6 +1164,7 @@ static int is_extension_needed(bcf1_t *rec, int8_t **tmp_arr, int *m_tmp_arr) {
     hts_expand(int8_t, sizeof(int) * rec->n_allele, *m_tmp_arr, *tmp_arr);
     int *len = (int *)(*tmp_arr);
     for (int i = 0; i < rec->n_allele; i++) len[i] = strlen(rec->d.allele[i]);
+    if (rec->n_allele == 1 && len[0] == 1) return 1; // covers weird ClinVar cases
 
     for (int i = 0; i < rec->n_allele; i++) {
         for (int j = i + 1; j < rec->n_allele; j++) {
@@ -1232,51 +1241,6 @@ static int liftover_bp(regidx_t *idx, regitr_t *itr, const char *t_chr, hts_pos_
     return block_ind;
 }
 
-// t_pos has to be provided in 1-based coordinates
-// itr->beg is the equivalent of block->tStart + 1
-// itr->end is the equivalent of block->tEnd
-// t_shift tells me how far I have to go to reach the next base pair that can be lifted over using the next block in the
-// same chain q_shift tells me how far I have to go to reach the next lifted over base pair using the next block in the
-// same chain
-// static int liftover_snp(regidx_t *idx, regitr_t *itr, const char *chr, hts_pos_t t_pos, int t_strand, int *q_rid,
-//                        hts_pos_t *q_pos, int *q_strand, int *t_shift, int *q_shift) {
-//    static const int max_indel_gap = 20;
-//    *t_shift = 0;
-//    *q_shift = 0;
-//    int block_ind = -1;
-//    if (regidx_overlap(idx, chr, (uint32_t)t_pos, (uint32_t)t_pos, itr)) {
-//        for (int i = 0; regitr_overlap(itr); i++) {
-//            if (i > 0)
-//                fprintf(stderr, "Warning: more than one contiguous block overlaps with position %s:%" PRIhts_pos "\n",
-//                        chr, t_pos);
-//            block_ind = regitr_payload(itr, int);
-//            block_t *block = &args->blocks[block_ind];
-//            assert(block->size == itr->end - itr->beg + 1);
-//            chain_t *chain = &args->chains[block->chain_ind];
-//
-//            *q_rid = chain->q_rid;
-//            *q_strand = chain->qStrand;
-//            int block_pos = t_pos - itr->beg;
-//            if (*q_strand) // - strand
-//                *q_pos = (hts_pos_t)(chain->qSize - chain->qStart - block->qStart - block_pos);
-//            else // + strand
-//                *q_pos = (hts_pos_t)(chain->qStart + block->qStart + block_pos + 1);
-//            if (t_strand) { // pad sequence to the left
-//                if (block->tStart_gap >= 0 && block->tStart_gap < max_indel_gap) {
-//                    *t_shift = block_pos + block->tStart_gap + 1;
-//                    *q_shift = block_pos + block->qStart_gap + 1;
-//                }
-//            } else { // pad sequence to the right
-//                if (block->tEnd_gap >= 0 && block->tEnd_gap < max_indel_gap) {
-//                    *t_shift = (itr->end - itr->beg) - block_pos + block->tEnd_gap + 1;
-//                    *q_shift = (itr->end - itr->beg) - block_pos + block->qEnd_gap + 1;
-//                }
-//            }
-//        }
-//    }
-//    return block_ind;
-//}
-
 // position are 1-based
 static int liftover_indel(regidx_t *idx, regitr_t *itr, const char *src_chr, hts_pos_t src_pos5, hts_pos_t src_pos3,
                           int max_indel_inc, int *dst_rid, hts_pos_t *dst_pos5, hts_pos_t *dst_pos3, int *strand,
@@ -1316,9 +1280,6 @@ static int liftover_indel(regidx_t *idx, regitr_t *itr, const char *src_chr, hts
                 pos5 = pos3 - (src_pos3 - src_pos5) + *npad; // 1
             }
         }
-
-        *dst_pos5 = *strand == 0 ? pos5 : pos3;
-        *dst_pos3 = *strand == 0 ? pos3 : pos5;
     } else if (!block3) { // pad sequence to the right
         const chain_t *aux_chain = &args->chains[block5->chain_ind];
         int src_chr_size = aux_chain->tSize;
@@ -1347,9 +1308,6 @@ static int liftover_indel(regidx_t *idx, regitr_t *itr, const char *src_chr, hts
                 pos3 = pos5 + (src_pos3 - src_pos5) + *npad; // dst_chr_size
             }
         }
-
-        *dst_pos5 = *strand == 0 ? pos5 : pos3;
-        *dst_pos3 = *strand == 0 ? pos3 : pos5;
     } else {
         if (block5->chain_ind != block3->chain_ind) return -1;
         if (rid5 != rid3) return -1;
@@ -1357,10 +1315,10 @@ static int liftover_indel(regidx_t *idx, regitr_t *itr, const char *src_chr, hts
         if (strand5 != strand3) return -1;
         *strand = strand5;
         if (abs((int)(pos3 - pos5)) > src_pos3 - src_pos5 + max_indel_inc) return -1;
-        *dst_pos5 = *strand == 0 ? pos5 : pos3;
-        *dst_pos3 = *strand == 0 ? pos3 : pos5;
     }
 
+    *dst_pos5 = *strand == 0 ? pos5 : pos3;
+    *dst_pos3 = *strand == 0 ? pos3 : pos5;
     assert(*dst_pos5 <= *dst_pos3);
     return 0;
 }
