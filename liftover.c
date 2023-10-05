@@ -36,7 +36,7 @@
 #include "htslib/khash.h" // required to reset the contigs dictionary and table
 KHASH_MAP_INIT_STR(vdict, bcf_idinfo_t)
 
-#define LIFTOVER_VERSION "2023-09-26"
+#define LIFTOVER_VERSION "2023-10-05"
 
 #define FLIP_TAG "FLIP"
 #define SWAP_TAG "SWAP"
@@ -534,12 +534,12 @@ const char *usage(void) {
            "      bcftools +liftover -Ob -o output.hg38.bcf input.hg19.bcf -- \\\n"
            "        -s human_g1k_v37.fasta -f Homo_sapiens_assembly38.fasta -c hg19ToHg38.over.chain.gz\n"
            "      bcftools +liftover -Oz -o chm13v2.0_dbSNPv155.vcf.gz GRCh38_dbSNPv155.vcf.gz -- \\\n"
-           "        -s Homo_sapiens_assembly38.fasta -f chm13v2.0.fa -c hg38-chm13v2.over.chain.gz\n"
+           "        -s Homo_sapiens_assembly38.fasta -f chm13v2.0.fa -c hg38ToHs1.over.chain.gz\n"
            "\n"
            "To obtain liftover chain files:\n"
            "      wget http://hgdownload.cse.ucsc.edu/goldenpath/hg19/liftOver/hg19ToHg38.over.chain.gz\n"
            "      wget http://ftp.ensembl.org/pub/assembly_mapping/homo_sapiens/GRCh37_to_GRCh38.chain.gz\n"
-           "      wget http://hgdownload.cse.ucsc.edu/goldenPath/hs1/liftOver/hg38-chm13v2.over.chain.gz\n"
+           "      wget http://hgdownload.soe.ucsc.edu/goldenPath/hg38/liftOver/hg38ToHs1.over.chain.gz\n"
            "\n";
 }
 
@@ -1269,7 +1269,8 @@ static int liftover_indel(regidx_t *idx, regitr_t *itr, const char *src_chr, hts
 
         // attempt to liftover the new anchor
         block_ind5 = liftover_bp(idx, itr, src_chr, src_pos5 + *npad, &rid5, &pos5, &strand5);
-        if (rid5 != rid3 || strand5 != strand3 || pos5 - pos3 < -max_indel_inc || pos5 - pos3 > max_indel_inc) {
+        int dst_npad = *strand ? pos5 - pos3 : pos3 - pos5; // check that the other anchor did not liftover too far
+        if (rid5 != rid3 || strand5 != strand3 || dst_npad < 0 || dst_npad > max_indel_inc) {
             if (*strand) {
                 // hit right edge on the destination chromosome
                 if (pos3 - *npad > dst_chr_size) *npad = pos3 - dst_chr_size;
@@ -1296,7 +1297,8 @@ static int liftover_indel(regidx_t *idx, regitr_t *itr, const char *src_chr, hts
 
         // attempt to liftover the new anchor
         block_ind3 = liftover_bp(idx, itr, src_chr, src_pos3 + *npad, &rid3, &pos3, &strand3);
-        if (rid5 != rid3 || strand5 != strand3 || pos5 - pos3 < -max_indel_inc || pos5 - pos3 > max_indel_inc) {
+        int dst_npad = *strand ? pos5 - pos3 : pos3 - pos5; // check that the other anchor did not liftover too far
+        if (rid5 != rid3 || strand5 != strand3 || dst_npad < 0 || dst_npad > max_indel_inc) {
             if (*strand) {
                 // hit left edge on the destination chromosome
                 if (pos5 - *npad < 1) *npad = pos5 - 1;

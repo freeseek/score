@@ -33,7 +33,7 @@
 #include "bcftools.h"
 #include "filter.h"
 
-#define METAL_VERSION "2023-09-19"
+#define METAL_VERSION "2023-10-05"
 
 // Logic of the filters: include or exclude sites which match the filters?
 #define FLT_INCLUDE 1
@@ -661,6 +661,7 @@ int run(int argc, char **argv) {
     // process GWAS-VCF rows
     float *val_arr = (float *)malloc(sizeof(float) * SIZE * n_smpl);
     char *esd_arr = (char *)malloc(sizeof(float) * n_files * n_smpl);
+    for (int i = 0; i < n_files * n_smpl; i++) esd_arr[i] = bcf_str_vector_end;
     bcf1_t *out_line = bcf_init();
     bcf_float_set_missing(out_line->qual);
     while (bcf_sr_next_line(sr)) {
@@ -677,8 +678,6 @@ int run(int argc, char **argv) {
         }
 
         for (int i = 0; i < SIZE * n_smpl; i++) bcf_float_set_missing(val_arr[i]);
-        if (esd)
-            for (int i = 0; i < n_files * n_smpl; i++) esd_arr[i] = bcf_str_vector_end;
 
         for (int i = 0; i < n_smpl; i++) {
             double xnum = 0.0;
@@ -693,6 +692,7 @@ int run(int argc, char **argv) {
             int df = -1;
             bcf_update_id(NULL, out_line, NULL);
             for (int k = 0; k < i2n[i]; k++) {
+                esd_arr[n_files * i + k] = '?';
                 int j = i_k2j[i][k];
                 if (!bcf_sr_has_line(sr, j)) continue;
                 bcf1_t *line = bcf_sr_get_line(sr, j);
@@ -718,6 +718,11 @@ int run(int argc, char **argv) {
                         val[idx] = NAN;
                 }
 
+                if (esd) {
+                    int effect = szw ? EZ : ES;
+                    if (!isnan(val[effect])) esd_arr[n_files * i + k] = val[effect] == 0.0 ? '0' : (val[effect] > 0.0 ? '+' : '-');
+                }
+
                 if (isnan(val[NE])) {
                     if (isnan(val[NS])) continue;
                     // compute effective sample size for binary traits
@@ -735,13 +740,11 @@ int run(int argc, char **argv) {
                     }
                     xnum += val[EZ] * sqrt(wt);
                     cq_sum += val[EZ] * val[EZ];
-                    esd_arr[n_files * i + k] = val[EZ] == 0.0 ? '0' : (val[EZ] > 0.0 ? '+' : '-');
                 } else { // inverse-variance weighted scheme
                     if (isnan(val[ES]) || isnan(val[SE])) continue;
                     wt = 1.0 / (val[SE] * val[SE]);
                     xnum += val[ES] * wt;
                     cq_sum += val[ES] * val[ES] * wt;
-                    esd_arr[n_files * i + k] = val[ES] == 0.0 ? '0' : (val[ES] > 0.0 ? '+' : '-');
                 }
 
                 xden += wt;
@@ -753,11 +756,6 @@ int run(int argc, char **argv) {
 
                 if (line->d.id[0] != '.' || line->d.id[1]) bcf_add_id(NULL, out_line, line->d.id);
                 df++;
-            }
-
-            if (esd) { // no effect size direction for phenotypes with only one study
-                if (df <= 0) esd_arr[n_files * i] = bcf_str_missing;
-                for (int k = df > 0 ? df + 1 : 1; k < n_files; k++) esd_arr[n_files * i + k] = bcf_str_vector_end;
             }
 
             if (df < 0) continue;

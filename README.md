@@ -146,12 +146,12 @@ Examples:
       bcftools +liftover -Ob -o output.hg38.bcf input.hg19.bcf -- \
         -s human_g1k_v37.fasta -f Homo_sapiens_assembly38.fasta -c hg19ToHg38.over.chain.gz
       bcftools +liftover -Oz -o chm13v2.0_dbSNPv155.vcf.gz GRCh38_dbSNPv155.vcf.gz -- \
-        -s Homo_sapiens_assembly38.fasta -f chm13v2.0.fa -c hg38-chm13v2.over.chain.gz
+        -s Homo_sapiens_assembly38.fasta -f chm13v2.0.fa -c hg38ToHs1.over.chain.gz
 
 To obtain liftover chain files:
       wget http://hgdownload.cse.ucsc.edu/goldenpath/hg19/liftOver/hg19ToHg38.over.chain.gz
       wget http://ftp.ensembl.org/pub/assembly_mapping/homo_sapiens/GRCh37_to_GRCh38.chain.gz
-      wget http://hgdownload.cse.ucsc.edu/goldenPath/hs1/liftOver/hg38-chm13v2.over.chain.gz
+      wget http://hgdownload.cse.ucsc.edu/goldenPath/hs1/liftOver/hg38ToHs1.over.chain.gz
 ```
 
 Meta-analysis tool:
@@ -723,7 +723,7 @@ bcftools norm --no-version -Ou -m+ 1kGP_high_coverage_Illumina.sites.vcf.gz | \
 bcftools +liftover --no-version -Ou -- \
   -s $HOME/GRCh38/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna \
   -f $HOME/hs1/hs1.fa \
-  -c $HOME/hs1/hg38-chm13v2.over.chain.gz \
+  -c $HOME/hs1/hg38ToHs1.over.chain.gz \
 bcftools sort -Ob | tee 1kGP_high_coverage_Illumina.sites.hs1.bcf | \
 bcftools index --force --output 1kGP_high_coverage_Illumina.sites.hs1.bcf.csi
 ```
