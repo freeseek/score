@@ -32,11 +32,11 @@
 #include <htslib/vcf.h>
 #include <htslib/faidx.h>
 #include "bcftools.h"
-#include "regidx.h"
+#include "regidx.h" // cannot use htslib/regdix.h see https://github.com/samtools/htslib/pull/761
 #include "htslib/khash.h" // required to reset the contigs dictionary and table
 KHASH_MAP_INIT_STR(vdict, bcf_idinfo_t)
 
-#define LIFTOVER_VERSION "2023-10-05"
+#define LIFTOVER_VERSION "2023-10-16"
 
 #define FLIP_TAG "FLIP"
 #define SWAP_TAG "SWAP"
@@ -1325,7 +1325,7 @@ static int liftover_indel(regidx_t *idx, regitr_t *itr, const char *src_chr, hts
     return 0;
 }
 
-static int find_reference(bcf1_t *rec, const bcf_hdr_t *hdr, const char *ref, kstring_t *str) {
+static int find_reference(bcf1_t *rec, const bcf_hdr_t *hdr, const char *ref, int is_snp, kstring_t *str) {
     int swap = -1;
     int ref_len = strlen(ref);
     for (int i = 0; i < rec->n_allele; i++) {
@@ -1342,6 +1342,37 @@ static int find_reference(bcf1_t *rec, const bcf_hdr_t *hdr, const char *ref, ks
             } else {
                 swap = i;
             }
+        }
+    }
+
+    // this is a special hack to avoid SNPs becoming complex variants (e.g. rs17554556)
+    // when the new assembly is longer due to an insertion right or left of the SNP
+    // and the anchors are ambiguous (saves ~30% of SNPs from becoming complex variants)
+    if (swap < 0 && is_snp && ref_len > 2 && ref_len != strlen(rec->d.allele[0])) {
+        int len, left_match, right_match, n_matches = 0;
+        for (int i = 0; i < rec->n_allele; i++) {
+            len = strlen(rec->d.allele[i]);
+            if (len < ref_len) {
+                left_match = !strncasecmp(ref, rec->d.allele[i], len - 1);
+                right_match = !strncasecmp(ref + 1 + ref_len - len, rec->d.allele[i] + 1, len);
+                n_matches += left_match + right_match;
+                if (n_matches > 1) break; // too many matches
+                if (left_match || right_match) swap = i;
+            }
+        }
+        if (n_matches == 1) {
+            len = strlen(rec->d.allele[swap]);
+            left_match = !strncasecmp(ref, rec->d.allele[swap], len - 1);
+            right_match = !strncasecmp(ref + 1 + ref_len - len, rec->d.allele[swap] + 1, len);
+            if (left_match) {
+                ref_len = len;
+            } else { // right match
+                ref += ref_len - len;
+                rec->pos += ref_len - len;
+                ref_len = len;
+            }
+        } else {
+            swap = -1;
         }
     }
 
@@ -2327,7 +2358,7 @@ bcf1_t *process(bcf1_t *rec) {
             error("Unable to fetch sequence from the destination reference at %s:%" PRIhts_pos "-%" PRIhts_pos
                   " while processing variant at position %s:%" PRIhts_pos "\n",
                   bcf_seqname(args->out_hdr, rec), dst_pos5, dst_pos3, src_chr, src_pos);
-        swap = find_reference(rec, args->out_hdr, ref, &args->tmp_kstr);
+        swap = find_reference(rec, args->out_hdr, ref, is_snp, &args->tmp_kstr);
         free(ref);
     }
 
