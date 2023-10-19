@@ -33,7 +33,7 @@
 #include "bcftools.h"
 #include "filter.h"
 
-#define METAL_VERSION "2023-10-05"
+#define METAL_VERSION "2023-10-18"
 
 // Logic of the filters: include or exclude sites which match the filters?
 #define FLT_INCLUDE 1
@@ -723,8 +723,7 @@ int run(int argc, char **argv) {
                     if (!isnan(val[effect])) esd_arr[n_files * i + k] = val[effect] == 0.0 ? '0' : (val[effect] > 0.0 ? '+' : '-');
                 }
 
-                if (isnan(val[NE])) {
-                    if (isnan(val[NS])) continue;
+                if (isnan(val[NE]) && !isnan(val[NS])) {
                     // compute effective sample size for binary traits
                     val[NE] = isnan(val[NC]) ? val[NS] : 4.0 * (val[NS] - val[NC]) * val[NC] / val[NS];
                 }
