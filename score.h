@@ -112,11 +112,15 @@ static const mapping_t pgs_mapping[] = {{"chr_name", HDR_CHR},
                                         {"allelefrequency_effect", HDR_FRQ}};
 
 // see http://doi.org/10.1101/2022.07.15.500230
+// and http://www.ebi.ac.uk/gwas/docs/summary-statistics-format#format
+// there is a mismatch between rsid and rs_id between the two definitions
+// TODO support the encouraged ref_allele column
 static const mapping_t ssf_mapping[] = {{"chromosome", HDR_CHR},   {"base_pair_location", HDR_BP},
                                         {"variant_id", HDR_SNP},   {"rsid", HDR_SNP},
-                                        {"effect_allele", HDR_A1}, {"other_allele", HDR_A2},
-                                        {"p_value", HDR_P},        {"odds_ratio", HDR_OR},
-                                        {"hazard_ratio", HDR_OR},  {"beta", HDR_BETA},
+                                        {"rs_id", HDR_SNP},        {"effect_allele", HDR_A1},
+                                        {"other_allele", HDR_A2},  {"p_value", HDR_P},
+                                        {"odds_ratio", HDR_OR},    {"hazard_ratio", HDR_OR},
+                                        {"beta", HDR_BETA},        {"n", HDR_N},
                                         {"info", HDR_INFO},        {"effect_allele_frequency", HDR_FRQ},
                                         {"standard_error", HDR_SE}};
 
@@ -161,7 +165,8 @@ static inline mapping_t *mapping_file_init(const char *fname, int *n) {
         char *ret = strchr(str.s, '\t');
         if (!ret) error("Could not parse line: %s\n", str.s);
         *ret = '\0';
-        for (int i = 0; i < HDR_SIZE; i++) {
+        int i;
+        for (i = 0; i < HDR_SIZE; i++) {
             if (strcmp(ret + 1, col_headers[i]) != 0) continue;
             hts_expand(mapping_t, mapping_n + 1, mapping_m, mapping);
             mapping[mapping_n].hdr_str = strdup(str.s);

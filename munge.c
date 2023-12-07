@@ -35,7 +35,7 @@
 #include "bcftools.h"
 #include "score.h"
 
-#define MUNGE_VERSION "2023-09-19"
+#define MUNGE_VERSION "2023-12-06"
 
 #define IFFY_TAG "IFFY"
 #define MISMATCH_TAG "REF_MISMATCH"
@@ -79,7 +79,8 @@ int tsv_read_allele(tsv_t *tsv, bcf1_t *rec, void *usr) {
     }
 
     int symbolic = (tsv->ss[0] == 'D' || tsv->ss[0] == 'I' || tsv->ss[0] == 'd' || tsv->ss[0] == 'i');
-    for (char *ptr = tsv->ss; ptr < tsv->se; ptr++)
+    char *ptr;
+    for (ptr = tsv->ss; ptr < tsv->se; ptr++)
         if (*ptr == '+') symbolic = 1;
     if (symbolic) {
         str->l = tsv->se - tsv->ss + 2;
@@ -95,7 +96,8 @@ int tsv_read_allele(tsv_t *tsv, bcf1_t *rec, void *usr) {
     } else {
         str->l = tsv->se - tsv->ss;
         ks_resize(str, str->l + 1);
-        for (int i = 0; i < str->l; i++) str->s[i] = toupper(tsv->ss[i]);
+        int i;
+        for (i = 0; i < str->l; i++) str->s[i] = toupper(tsv->ss[i]);
     }
     str->s[str->l] = '\0';
     return 0;
@@ -193,6 +195,7 @@ int run(int argc, char **argv) {
     float ns = 0.0f;
     float nc = 0.0f;
     float ne = 0.0f;
+    int i, idx;
     int cache_size = 0;
     int record_cmd_line = 1;
     int output_type = FT_VCF;
@@ -333,7 +336,7 @@ int run(int argc, char **argv) {
     if (cache_size) fai_set_cache_size(fai, cache_size);
     bcf_hdr_t *hdr = bcf_hdr_init("w");
     int n = faidx_nseq(fai);
-    for (int i = 0; i < n; i++) {
+    for (i = 0; i < n; i++) {
         const char *seq = faidx_iseq(fai, i);
         int len = faidx_seq_len(fai, seq);
         bcf_hdr_printf(hdr, "##contig=<ID=%s,length=%d>", seq, len);
@@ -395,7 +398,7 @@ int run(int argc, char **argv) {
     int output_esd = 0;
     float val_nco;
     float val[SIZE];
-    for (int i = 0; i < mapping_n; i++) {
+    for (i = 0; i < mapping_n; i++) {
         void *usr;
         switch (mapping[i].hdr_num) {
         case HDR_SNP:
@@ -534,7 +537,7 @@ int run(int argc, char **argv) {
     if (!output[ES]) fprintf(stderr, "Warning: could not find column to compute beta in input file\n");
     if (!output[SE]) fprintf(stderr, "Warning: could not find standard error column in input file\n");
     if (!output[LP]) fprintf(stderr, "Warning: could not find column to compute -log10 p-value in input file\n");
-    for (int idx = 0; idx < SIZE; idx++)
+    for (idx = 0; idx < SIZE; idx++)
         if (output[idx]
             && bcf_hdr_printf(hdr, "##FORMAT=<ID=%s,Number=A,Type=Float,Description=\"%s\">", id_str[idx],
                               desc_str[idx])
@@ -545,7 +548,7 @@ int run(int argc, char **argv) {
                < 0)
         error_errno("Failed to add \"%s\" FORMAT header", id_str[SIZE]);
     if (record_cmd_line) bcf_hdr_append_version(hdr, argc, argv, "bcftools_munge");
-    for (int idx = 0; idx < SIZE; idx++) {
+    for (idx = 0; idx < SIZE; idx++) {
         if (output[idx]) {
             bcf_hdr_add_sample(hdr, sample);
             break;
@@ -563,7 +566,7 @@ int run(int argc, char **argv) {
         alleles[0].l = 0;
         alleles[1].l = 0;
         bcf_update_filter(hdr, rec, NULL, 0);
-        for (int idx = 0; idx < SIZE; idx++) val[idx] = NAN;
+        for (idx = 0; idx < SIZE; idx++) val[idx] = NAN;
         esd_str.l = 0;
         if (ns) val[NS] = ns;
         if (nc) val[NC] = nc;
@@ -602,19 +605,21 @@ int run(int argc, char **argv) {
             kputc(',', &alleles[1]);
             kputs(alleles[0].s, &alleles[1]);
             bcf_update_alleles_str(hdr, rec, alleles[1].s);
-            if (output_esd)
-                for (char *ptr = esd_str.s; ptr < esd_str.s + esd_str.l; ptr++) {
+            if (output_esd) {
+                char *ptr;
+                for (ptr = esd_str.s; ptr < esd_str.s + esd_str.l; ptr++) {
                     if (*ptr == '+')
                         *ptr = '-';
                     else if (*ptr == '-')
                         *ptr = '+';
                 }
+            }
         } else {
             kputc(',', &alleles[0]);
             kputs(alleles[1].s, &alleles[0]);
             bcf_update_alleles_str(hdr, rec, alleles[0].s);
         }
-        for (int idx = 0; idx < SIZE; idx++) {
+        for (idx = 0; idx < SIZE; idx++) {
             if (output[idx]) {
                 if (isnan(val[idx])) bcf_float_set_missing(val[idx]);
                 bcf_update_format_float(hdr, rec, id_str[idx], &val[idx], 1);
@@ -632,7 +637,7 @@ int run(int argc, char **argv) {
     free(esd_str.s);
     free(str.s);
     if (columns_fname) {
-        for (int i = 0; i < mapping_n; i++) free(mapping[i].hdr_str);
+        for (i = 0; i < mapping_n; i++) free(mapping[i].hdr_str);
         free(mapping);
     }
     bcf_hdr_destroy(hdr);

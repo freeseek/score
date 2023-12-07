@@ -36,7 +36,7 @@
 #include "filter.h"
 #include "score.h"
 
-#define SCORE_VERSION "2023-09-19"
+#define SCORE_VERSION "2023-12-06"
 
 #define FLT_INCLUDE (1 << 0)
 #define FLT_EXCLUDE (1 << 1)
@@ -124,7 +124,8 @@ static int tsv_read_allele(tsv_t *tsv, bcf1_t *rec, void *usr) {
     } else {
         char tmp = *tsv->se;
         *tsv->se = 0;
-        for (char *s = tsv->ss; s < tsv->se; s++) *s = toupper((unsigned char)*s);
+        char *s;
+        for (s = tsv->ss; s < tsv->se; s++) *s = toupper((unsigned char)*s);
         if (khash_str2int_get(alleles->str2int, tsv->ss, idx) < 0) {
             hts_expand(char *, alleles->n + 1, alleles->m, alleles->str);
             alleles->str[alleles->n] = strdup(tsv->ss);
@@ -212,7 +213,8 @@ static summary_t *summary_init(const char *fn, bcf_hdr_t *hdr, mapping_t *mappin
     marker_t *marker = (marker_t *)calloc(1, sizeof(marker_t));
     tsv_t *tsv = tsv_init_delimiter(str.s, delimiter);
 
-    for (int i = 0; i < mapping_n; i++) {
+    int i;
+    for (i = 0; i < mapping_n; i++) {
         void *usr;
         if (!tsv_setters[mapping[i].hdr_num]) continue;
         switch (mapping[i].hdr_num) {
@@ -446,7 +448,8 @@ static double *parse_list(const char *str, int *n) {
     char *endptr;
     char **s = hts_readlist(str, 0, n);
     double *v = (double *)malloc(*n * sizeof(double));
-    for (int i = 0; i < *n; i++) {
+    int i;
+    for (i = 0; i < *n; i++) {
         v[i] = strtof(s[i], &endptr);
         if (*endptr) error("Could not parse element: %s\n", s[i]);
         free(s[i]);
@@ -456,6 +459,7 @@ static double *parse_list(const char *str, int *n) {
 }
 
 int run(int argc, char **argv) {
+    int i, j, k, idx, ap;
     int use_tag = 0;
     int display_cnts = 0;
     int filter_logic = 0;
@@ -642,7 +646,7 @@ int run(int argc, char **argv) {
     int n_q_score_thr = 1;
     double *q_score_thr = q_score_thr_str ? parse_list(q_score_thr_str, &n_q_score_thr) : NULL;
     if (q_score_thr)
-        for (int i = 0; i < n_q_score_thr; i++) q_score_thr[i] = -log10(q_score_thr[i]);
+        for (i = 0; i < n_q_score_thr; i++) q_score_thr[i] = -log10(q_score_thr[i]);
 
     // subset VCF file
     if (sample_names) {
@@ -676,14 +680,14 @@ int run(int argc, char **argv) {
     int m_prs_names = 0;
     if (!(flags & TSV_MODE)) {
         n_prs = 0;
-        for (int i = 0; i < n_files; i++) {
+        for (i = 0; i < n_files; i++) {
             if (!bcf_sr_add_reader(sr, filenames[i]))
                 error("Error opening %s: %s\n", filenames[i], bcf_sr_strerror(sr->errnum));
             hdr = bcf_sr_get_header(sr, i + 1);
             hts_expand(int, n_prs + bcf_hdr_nsamples(hdr), m_prs2vcf, prs2vcf);
             hts_expand(int, n_prs + bcf_hdr_nsamples(hdr), m_prs2idx, prs2idx);
             hts_expand(char *, n_prs + bcf_hdr_nsamples(hdr), m_prs_names, prs_names);
-            for (int j = 0; j < bcf_hdr_nsamples(hdr); j++) {
+            for (j = 0; j < bcf_hdr_nsamples(hdr); j++) {
                 prs2vcf[n_prs + j] = i + 1;
                 prs2idx[n_prs + j] = j;
                 prs_names[n_prs + j] = strdup(hdr->samples[j]);
@@ -717,7 +721,7 @@ int run(int argc, char **argv) {
                                             : mapping_file_init(columns_fname, &mapping_n);
         if (columns_preset && !mapping)
             error("Error: preset not recognized with --columns %s\n%s", columns_preset, usage_text());
-        for (int i = 0; i < n_prs; i++) {
+        for (i = 0; i < n_prs; i++) {
             summaries[i] = summary_init(filenames[i], hdr, mapping, mapping_n, flags);
             fprintf(stderr, "Loaded %d out of %d markers from file %s and matching by %s\n", summaries[i]->n_markers,
                     summaries[i]->all_markers, filenames[i],
@@ -733,7 +737,7 @@ int run(int argc, char **argv) {
             prs_names[i] = strdup(strrchr(filenames[i], '/') ? strrchr(filenames[i], '/') + 1 : filenames[i]);
         }
         if (columns_fname) {
-            for (int i = 0; i < mapping_n; i++) free(mapping[i].hdr_str);
+            for (i = 0; i < mapping_n; i++) free(mapping[i].hdr_str);
             free(mapping);
         }
     }
@@ -823,14 +827,14 @@ int run(int argc, char **argv) {
 
         int skip_line = 1;
         if (!(flags & TSV_MODE)) {
-            for (int i = 0; i < n_files; i++) {
+            for (i = 0; i < n_files; i++) {
                 if (!bcf_sr_has_line(sr, i + 1)) continue;
                 n_matched[i]++;
                 skip_line = 0;
             }
         } else {
             memset((void *)idxs, -1, n_prs * sizeof(int));
-            for (int i = 0; i < n_prs; i++) {
+            for (i = 0; i < n_prs; i++) {
                 if (summaries[i]->use_snp) {
                     if (khash_str2int_get(summaries[i]->id2idx, line->d.id, &idxs[i]) < 0) continue;
                 } else {
@@ -857,7 +861,7 @@ int run(int argc, char **argv) {
             if (number <= 0) continue;
             number /= bcf_hdr_nsamples(hdr);
             assert(number == 2);
-            for (int k = 0; k < n_smpls; k++) {
+            for (k = 0; k < n_smpls; k++) {
                 int32_t *ptr = int32_arr + (number * k);
                 if (bcf_gt_is_missing(ptr[0]) || bcf_gt_is_missing(ptr[1])) {
                     missing[k] = 1;
@@ -880,7 +884,7 @@ int run(int argc, char **argv) {
             number /= bcf_hdr_nsamples(hdr);
             assert(number == line->n_allele - 1);
             if (number == 1) { // line->n_allele == 2
-                for (int k = 0; k < n_smpls; k++) {
+                for (k = 0; k < n_smpls; k++) {
                     if (is_missing(float_arr[k])) {
                         missing[k] = 1;
                     } else {
@@ -889,10 +893,10 @@ int run(int argc, char **argv) {
                     }
                 }
             } else {
-                for (int k = 0; k < n_smpls; k++) {
+                for (k = 0; k < n_smpls; k++) {
                     float *ptr = float_arr + (number * k);
                     aps[k] += 2.0f;
-                    for (int idx = 0; idx < number; idx++) {
+                    for (idx = 0; idx < number; idx++) {
                         if (is_missing(ptr[idx])) {
                             missing[k] = 1;
                         } else {
@@ -908,7 +912,7 @@ int run(int argc, char **argv) {
             if (number <= 0) continue;
             number /= bcf_hdr_nsamples(hdr);
             assert(number == 2 && line->n_allele == 2);
-            for (int k = 0; k < n_smpls; k++) {
+            for (k = 0; k < n_smpls; k++) {
                 if (is_missing(float_arr[2 * k]) || is_missing(float_arr[2 * k + 1])) {
                     missing[k] = 1;
                 } else {
@@ -918,13 +922,13 @@ int run(int argc, char **argv) {
             }
             break;
         case SCORE_AP:
-            for (int ap = 0; ap < sizeof(ap_str) / sizeof(char *); ap++) {
+            for (ap = 0; ap < sizeof(ap_str) / sizeof(char *); ap++) {
                 number = bcf_get_format_float(hdr, line, ap_str[ap], &float_arr, &m_float);
                 if (number <= 0) continue;
                 number /= bcf_hdr_nsamples(hdr);
                 assert(number == line->n_allele - 1);
                 if (number == 1) { // line->n_allele == 2
-                    for (int k = 0; k < n_smpls; k++) {
+                    for (k = 0; k < n_smpls; k++) {
                         if (is_missing(float_arr[k])) {
                             missing[k] = 1;
                         } else {
@@ -933,10 +937,10 @@ int run(int argc, char **argv) {
                         }
                     }
                 } else {
-                    for (int k = 0; k < n_smpls; k++) {
+                    for (k = 0; k < n_smpls; k++) {
                         float *ptr = float_arr + (number * k);
                         aps[k] += 1.0f;
-                        for (int idx = 0; idx < number; idx++) {
+                        for (idx = 0; idx < number; idx++) {
                             if (is_missing(ptr[idx])) {
                                 missing[k] = 1;
                             } else {
@@ -954,7 +958,7 @@ int run(int argc, char **argv) {
             number /= bcf_hdr_nsamples(hdr);
             assert(number == (line->n_allele) * (line->n_allele + 1) / 2);
             if (number == 3) { // line->n_allele == 2
-                for (int k = 0; k < n_smpls; k++) {
+                for (k = 0; k < n_smpls; k++) {
                     float *ptr = float_arr + (number * k);
                     if (is_missing(ptr[0]) || is_missing(ptr[1]) || is_missing(ptr[2])) {
                         missing[k] = 1;
@@ -964,14 +968,15 @@ int run(int argc, char **argv) {
                     }
                 }
             } else {
-                for (int k = 0; k < n_smpls; k++) {
+                for (k = 0; k < n_smpls; k++) {
                     float *ptr = float_arr + (number * k);
                     // The Variant Call Format Specification
                     // for P=2 and N=2, the ordering is 00,01,11,02,12,22
                     // for P=2, the index of the genotype “a/b”, where a≤b, is b(b+ 1)/2
                     // +a
-                    for (int b = 0; b < line->n_allele; b++) {
-                        for (int a = 0; a <= b; a++) {
+                    int a, b;
+                    for (b = 0; b < line->n_allele; b++) {
+                        for (a = 0; a <= b; a++) {
                             int idx = b * (b + 1) / 2 + a;
                             if (is_missing(ptr[idx])) {
                                 missing[k] = 1;
@@ -989,7 +994,7 @@ int run(int argc, char **argv) {
             if (number <= 0) continue;
             number /= bcf_hdr_nsamples(hdr);
             assert(number == 1 && line->n_allele == 2);
-            for (int k = 0; k < n_smpls; k++) {
+            for (k = 0; k < n_smpls; k++) {
                 if (int32_arr[k] == 0 || int32_arr[k] == bcf_int32_missing) {
                     missing[k] = 1;
                 } else {
@@ -1001,7 +1006,7 @@ int run(int argc, char **argv) {
         }
 
         float es, lp = 0.0f;
-        for (int i = 0; i < n_prs; i++) {
+        for (i = 0; i < n_prs; i++) {
             char *a1;
             if (!(flags & TSV_MODE)) {
                 if (!bcf_sr_has_line(sr, prs2vcf[i])) continue;
@@ -1040,19 +1045,19 @@ int run(int argc, char **argv) {
             for (idx_allele = 0; idx_allele < line->n_allele; idx_allele++)
                 if (strcmp(a1, line->d.allele[idx_allele]) == 0) break;
             if (idx_allele == line->n_allele) continue;
-            for (int j = 0; j < n_q_score_thr; j++) {
+            for (j = 0; j < n_q_score_thr; j++) {
                 if (q_score_thr && lp < q_score_thr[j]) continue;
                 float *ptr = scores + (i * n_q_score_thr + j) * n_smpls;
                 float *ptr2 = aps + idx_allele * n_smpls;
                 if (display_cnts) {
                     int *ptr3 = cnts + (i * n_q_score_thr + j) * n_smpls;
-                    for (int k = 0; k < n_smpls; k++) {
+                    for (k = 0; k < n_smpls; k++) {
                         if (missing[k]) continue;
                         ptr[k] += es * ptr2[k];
                         ptr3[k]++;
                     }
                 } else {
-                    for (int k = 0; k < n_smpls; k++) {
+                    for (k = 0; k < n_smpls; k++) {
                         if (missing[k]) continue;
                         ptr[k] += es * ptr2[k];
                     }
@@ -1062,10 +1067,10 @@ int run(int argc, char **argv) {
     }
 
     if (!(flags & TSV_MODE)) {
-        for (int i = 0; i < n_prs; i++)
+        for (i = 0; i < n_prs; i++)
             fprintf(stderr, "Matched %d markers for summary statistic %s\n", n_matched[i], prs_names[i]);
     } else {
-        for (int i = 0; i < n_prs; i++)
+        for (i = 0; i < n_prs; i++)
             fprintf(stderr, "Matched %d of %d loaded markers for summary statistic %s\n", n_matched[i],
                     summaries[i]->n_markers, prs_names[i]);
         alleles_destroy(alleles);
@@ -1073,8 +1078,8 @@ int run(int argc, char **argv) {
 
     hdr = bcf_sr_get_header(sr, 0);
     fprintf(out_fh, "%s", sample_header);
-    for (int i = 0; i < n_prs; i++) {
-        for (int j = 0; j < n_q_score_thr; j++) {
+    for (i = 0; i < n_prs; i++) {
+        for (j = 0; j < n_q_score_thr; j++) {
             fprintf(out_fh, "\t%s", prs_names[i]);
             if (q_score_thr) fprintf(out_fh, "_p%.6g", exp(-M_LN10 * q_score_thr[j]));
             if (display_cnts) {
@@ -1084,10 +1089,10 @@ int run(int argc, char **argv) {
         }
     }
     fprintf(out_fh, "\n");
-    for (int k = 0; k < n_smpls; k++) {
+    for (k = 0; k < n_smpls; k++) {
         fprintf(out_fh, "%s", hdr->samples[k]);
-        for (int i = 0; i < n_prs; i++)
-            for (int j = 0; j < n_q_score_thr; j++) {
+        for (i = 0; i < n_prs; i++)
+            for (j = 0; j < n_q_score_thr; j++) {
                 fprintf(out_fh, "\t%#.6g", scores[(i * n_q_score_thr + j) * n_smpls + k]);
                 if (display_cnts) fprintf(out_fh, "\t%d", cnts[(i * n_q_score_thr + j) * n_smpls + k]);
             }
@@ -1096,10 +1101,10 @@ int run(int argc, char **argv) {
 
     if (filter) filter_destroy(filter);
     if (pathname) {
-        for (int i = 0; i < n_files; i++) free(filenames[i]);
+        for (i = 0; i < n_files; i++) free(filenames[i]);
         free(filenames);
     }
-    for (int i = 0; i < n_prs; i++) free(prs_names[i]);
+    for (i = 0; i < n_prs; i++) free(prs_names[i]);
     free(prs_names);
     if (out_fh != stdout) fclose(out_fh);
     free(scores);
@@ -1115,7 +1120,7 @@ int run(int argc, char **argv) {
     free(prs2vcf);
     free(prs2idx);
     if (summaries) {
-        for (int i = 0; i < n_prs; i++) summary_destroy(summaries[i]);
+        for (i = 0; i < n_prs; i++) summary_destroy(summaries[i]);
         free(summaries);
     }
     bcf_sr_destroy(sr);

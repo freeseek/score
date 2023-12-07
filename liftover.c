@@ -32,11 +32,11 @@
 #include <htslib/vcf.h>
 #include <htslib/faidx.h>
 #include "bcftools.h"
-#include "regidx.h" // cannot use htslib/regdix.h see https://github.com/samtools/htslib/pull/761
+#include "regidx.h"       // cannot use htslib/regdix.h see https://github.com/samtools/htslib/pull/761
 #include "htslib/khash.h" // required to reset the contigs dictionary and table
 KHASH_MAP_INIT_STR(vdict, bcf_idinfo_t)
 
-#define LIFTOVER_VERSION "2023-10-16"
+#define LIFTOVER_VERSION "2023-12-06"
 
 #define FLIP_TAG "FLIP"
 #define SWAP_TAG "SWAP"
@@ -70,8 +70,8 @@ static inline char rev_nt(char iupac) {
 }
 
 static inline void reverse_complement(char *str) {
-    int len = strlen(str);
-    for (int i = 0; i < len / 2; i++) {
+    int i, len = strlen(str);
+    for (i = 0; i < len / 2; i++) {
         char tmp = str[i];
         str[i] = rev_nt(str[len - i - 1]);
         str[len - i - 1] = rev_nt(tmp);
@@ -332,14 +332,15 @@ static int read_chains(htsFile *fp, const bcf_hdr_t *in_hdr, const bcf_hdr_t *ou
 
 static void write_chains(FILE *stream, const bcf_hdr_t *in_hdr, const bcf_hdr_t *out_hdr, const chain_t *chains,
                          int n_chains, block_t *blocks) {
-    for (int i = 0; i < n_chains; i++) {
+    int i, j;
+    for (i = 0; i < n_chains; i++) {
         const chain_t *chain = &chains[i];
         const char *tName = bcf_hdr_id2name(in_hdr, chain->t_rid);
         const char *qName = bcf_hdr_id2name(out_hdr, chain->q_rid);
         fprintf(stream, "chain %" PRIhts_pos " %s %d + %d %d %s %d %c %d %d %d\n", chain->score, tName, chain->tSize,
                 chain->tStart, chain->tEnd, qName, chain->qSize, chain->qStrand ? '-' : '+', chain->qStart, chain->qEnd,
                 chain->id);
-        for (int j = 0; j < chain->n_blocks; j++) {
+        for (j = 0; j < chain->n_blocks; j++) {
             const block_t *block = &blocks[chain->block_ind + j];
             fprintf(stream, "%s\t%d\t%d\t%d\t%" PRIhts_pos "\t%c\t%s\t%d\t%d\n", tName, chain->tStart + block->tStart,
                     chain->tStart + block->tStart + block->size, chain->id, chain->score, chain->qStrand ? '-' : '+',
@@ -356,7 +357,8 @@ KHASH_MAP_INIT_INT(32, char)
 static regidx_t *regidx_init_chains(const bcf_hdr_t *in_hdr, const chain_t *chains, int n_chains, block_t *blocks) {
     khash_t(32) *h = kh_init(32);
     regidx_t *idx = regidx_init(NULL, NULL, NULL, sizeof(uint64_t), NULL);
-    for (int i = 0; i < n_chains; i++) {
+    int i, j;
+    for (i = 0; i < n_chains; i++) {
         const chain_t *chain = &chains[i];
         if (chain->t_rid < 0 || chain->q_rid < 0) continue;
 
@@ -370,7 +372,7 @@ static regidx_t *regidx_init_chains(const bcf_hdr_t *in_hdr, const chain_t *chai
 
         const char *name = bcf_hdr_id2name(in_hdr, chain->t_rid);
         int len = strlen(name);
-        for (int j = 0; j < chain->n_blocks; j++) {
+        for (j = 0; j < chain->n_blocks; j++) {
             int block_ind = chain->block_ind + j;
             const block_t *block = &blocks[block_ind];
             regidx_push(idx, (char *)name, (char *)name + len, chain->tStart + block->tStart + 1,
@@ -388,9 +390,10 @@ static regidx_t *regidx_init_chains(const bcf_hdr_t *in_hdr, const chain_t *chai
 // assign AGR tags rules
 static void find_AGR_tags(const bcf_hdr_t *hdr, int *info_rules, int *fmt_rules) {
     const int coltypes[2] = {BCF_HL_INFO, BCF_HL_FMT};
-    for (int i = 0; i < 2; i++) {
+    int i, j;
+    for (i = 0; i < 2; i++) {
         int *rules = i == 0 ? info_rules : fmt_rules;
-        for (int j = 0; j < hdr->n[BCF_DT_ID]; j++) {
+        for (j = 0; j < hdr->n[BCF_DT_ID]; j++) {
             // https://github.com/samtools/htslib/issues/1538
             if (!hdr->id[BCF_DT_ID][j].val || bcf_hdr_id2coltype(hdr, coltypes[i], j) == 0xf) continue;
             int length = bcf_hdr_id2length(hdr, coltypes[i], j);
@@ -404,9 +407,9 @@ static void assign_tags(const bcf_hdr_t *hdr, const char *tags, int length_flag,
                         int *info_rules, int *fmt_rules) {
     if (strcmp(tags, ".") == 0) return;
     char *s = strdup(tags);
-    int moff = 0, *off = NULL;
+    int i, moff = 0, *off = NULL;
     int n = ksplit_core(s, ',', &moff, &off);
-    for (int i = 0; i < n; i++) {
+    for (i = 0; i < n; i++) {
         char *ss = &s[off[i]];
         int coltype = -1;
         if (!strncasecmp("INFO/", ss, 5)) {
@@ -461,12 +464,11 @@ static void assign_tags(const bcf_hdr_t *hdr, const char *tags, int length_flag,
 // make list of tags rules
 static int compress_tags(int *info_rules, int *fmt_rules, int n, tag_t **tags) {
     const int coltypes[2] = {BCF_HL_INFO, BCF_HL_FMT};
-    int n_tags = 0;
-    int m_tags = 0;
+    int i, j, n_tags = 0, m_tags = 0;
     *tags = NULL;
-    for (int i = 0; i < 2; i++) {
+    for (i = 0; i < 2; i++) {
         int *rules = i == 0 ? info_rules : fmt_rules;
-        for (int j = 0; j < n; j++) {
+        for (j = 0; j < n; j++) {
             if (!rules[j]) continue;
             hts_expand(tag_t, n_tags + 1, m_tags, *tags);
             tag_t *tag = &(*tags)[n_tags++];
@@ -533,7 +535,7 @@ const char *usage(void) {
            "Examples:\n"
            "      bcftools +liftover -Ob -o output.hg38.bcf input.hg19.bcf -- \\\n"
            "        -s human_g1k_v37.fasta -f Homo_sapiens_assembly38.fasta -c hg19ToHg38.over.chain.gz\n"
-           "      bcftools +liftover -Oz -o chm13v2.0_dbSNPv155.vcf.gz GRCh38_dbSNPv155.vcf.gz -- \\\n"
+           "      bcftools +liftover -Oz -o chm13v2.0_dbSNPv156.vcf.gz GRCh38_dbSNPv156.vcf.gz -- \\\n"
            "        -s Homo_sapiens_assembly38.fasta -f chm13v2.0.fa -c hg38ToHs1.over.chain.gz\n"
            "\n"
            "To obtain liftover chain files:\n"
@@ -562,6 +564,7 @@ int init(int argc, char **argv, bcf_hdr_t *in, bcf_hdr_t *out) {
     args->aln_win = 100;
     args->flip_tag = FLIP_TAG;
     args->swap_tag = SWAP_TAG;
+    int i, j, k;
     int cache_size = 0;
     int output_type = FT_VCF;
     int clevel = -1;
@@ -716,6 +719,9 @@ int init(int argc, char **argv, bcf_hdr_t *in, bcf_hdr_t *out) {
         args->src_fai = fai_load(src_ref_fname);
         if (!args->src_fai) error("Could not load the reference %s\n", src_ref_fname);
         if (cache_size) fai_set_cache_size(args->src_fai, cache_size);
+    } else {
+        if (!dst_ref_fname || !chain_fname)
+            error("At least one of --src-fasta-ref or --fasta-ref and --chain options required\n");
     }
 
     // does not perform liftover ... only performs the indel extension
@@ -730,11 +736,11 @@ int init(int argc, char **argv, bcf_hdr_t *in, bcf_hdr_t *out) {
     bcf_hdr_remove(out, BCF_HL_CTG, NULL);
     // required to reset the contigs dictionary and table
     kh_clear(vdict, out->dict[BCF_DT_CTG]);
-    for (int i = 0; i < out->n[BCF_DT_CTG]; i++) free((void *)out->id[BCF_DT_CTG][i].key);
+    for (i = 0; i < out->n[BCF_DT_CTG]; i++) free((void *)out->id[BCF_DT_CTG][i].key);
     out->n[BCF_DT_CTG] = 0;
 
     int n = faidx_nseq(args->dst_fai);
-    for (int i = 0; i < n; i++) {
+    for (i = 0; i < n; i++) {
         const char *seq = faidx_iseq(args->dst_fai, i);
         int len = faidx_seq_len(args->dst_fai, seq);
         bcf_hdr_printf(out, "##contig=<ID=%s,length=%d>", seq, len);
@@ -747,8 +753,8 @@ int init(int argc, char **argv, bcf_hdr_t *in, bcf_hdr_t *out) {
         int coltypes[] = {BCF_HL_INFO, BCF_HL_INFO, BCF_HL_FMT, BCF_HL_FMT};
         int numbers[] = {1, 1, 3, 1};
         int lengths[] = {BCF_VL_A, BCF_VL_A, BCF_VL_G, BCF_VL_A};
-        for (int i = 0; i < 2; i++) {
-            for (int j = 0; j < 4; j++) {
+        for (i = 0; i < 2; i++) {
+            for (j = 0; j < 4; j++) {
                 int int_id = bcf_hdr_id2int(hdrs[i], BCF_DT_ID, tags[j]);
                 if (int_id < 0) continue;
                 bcf_idinfo_t *val = (bcf_idinfo_t *)hdrs[i]->id[BCF_DT_ID][int_id].val;
@@ -757,7 +763,7 @@ int init(int argc, char **argv, bcf_hdr_t *in, bcf_hdr_t *out) {
                     val->info[coltypes[j]] &= 0xff;
                     val->info[coltypes[j]] += lengths[j] << 8;
                     bcf_hrec_t *hrec = val->hrec[coltypes[j]];
-                    for (int k = 0; k < hrec->nkeys; k++) {
+                    for (k = 0; k < hrec->nkeys; k++) {
                         if (!strcmp(hrec->keys[k], "Number")) {
                             if (!strcmp(hrec->vals[k], "1"))
                                 hrec->vals[k][0] = 'A';
@@ -814,6 +820,15 @@ int init(int argc, char **argv, bcf_hdr_t *in, bcf_hdr_t *out) {
         if (bcf_hdr_printf(out, "##INFO=<ID=NW,Number=.,Type=String,Description=\"Needleman-Wunsch alignments\">") < 0)
             error_errno("Failed to add \"NW\" INFO header");
     }
+    if (src_ref_fname)
+        bcf_hdr_printf(out, "##liftover_target_reference=%s",
+                       strrchr(src_ref_fname, '/') ? strrchr(src_ref_fname, '/') + 1 : src_ref_fname);
+    if (dst_ref_fname)
+        bcf_hdr_printf(out, "##liftover_query_reference=%s",
+                       strrchr(dst_ref_fname, '/') ? strrchr(dst_ref_fname, '/') + 1 : dst_ref_fname);
+    if (chain_fname)
+        bcf_hdr_printf(out, "##liftover_chain_file=%s",
+                       strrchr(chain_fname, '/') ? strrchr(chain_fname, '/') + 1 : chain_fname);
     if (bcf_hdr_sync(out) < 0) error_errno("Failed to update header");
 
     // load chain file
@@ -852,7 +867,7 @@ int init(int argc, char **argv, bcf_hdr_t *in, bcf_hdr_t *out) {
     args->fmt_an_id = bcf_hdr_id2int(in, BCF_DT_ID, "AN");
     if (!bcf_hdr_idinfo_exists(in, BCF_HL_FMT, args->fmt_an_id)) args->fmt_an_id = -1;
     args->af_arr = (int *)malloc(sizeof(int) * bcf_hdr_nsamples(in));
-    for (int i = 0; i < bcf_hdr_nsamples(in); i++) args->af_arr[i] = 1;
+    for (i = 0; i < bcf_hdr_nsamples(in); i++) args->af_arr[i] = 1;
     args->ploidy_arr = (int *)malloc(sizeof(int) * bcf_hdr_nsamples(in));
 
     int *info_rules = (int *)calloc(sizeof(int), in->n[BCF_DT_ID]);
@@ -871,7 +886,7 @@ int init(int argc, char **argv, bcf_hdr_t *in, bcf_hdr_t *out) {
     args->n_tags = compress_tags(info_rules, fmt_rules, in->n[BCF_DT_ID], &args->tags);
     free(info_rules);
     free(fmt_rules);
-    for (int i = 0; i < args->n_tags; i++) {
+    for (i = 0; i < args->n_tags; i++) {
         tag_t *tag = &args->tags[i];
         const char *key = bcf_hdr_int2id(in, BCF_DT_ID, tag->int_id);
         fprintf(stderr, "%s/%s is handled by %s rule\n", tag->coltype == BCF_HL_INFO ? "INFO" : "FORMAT", key,
@@ -966,15 +981,19 @@ static void shift_left(bcf1_realign_t *this) {
     if (rec->n_allele == 1) return;
     while (rec->pos > 0) {
         char last_ref = this->als[0].s[this->als[0].l - 1];
-        for (int i = 1; i < rec->n_allele; i++)
+        int i;
+        for (i = 1; i < rec->n_allele; i++) {
+            if (this->als[i].s[0] == '*') continue;
             if (this->als[i].s[this->als[i].l - 1] != last_ref) return;
+        }
         if (this->beg == 0 || rec->pos - 1 < this->beg) {
             this->beg = rec->pos - this->aln_win;
             free(this->ref);
             safe_fetch_sequence(this);
         }
         char first_ref = this->ref[rec->pos - this->beg - 1];
-        for (int i = 0; i < rec->n_allele; i++) {
+        for (i = 0; i < rec->n_allele; i++) {
+            if (this->als[i].s[0] == '*') continue;
             memmove(this->als[i].s + 1, this->als[i].s, this->als[i].l);
             this->als[i].s[0] = first_ref;
         }
@@ -988,11 +1007,14 @@ static void trim_left(bcf1_realign_t *this) {
     int i, j;
     for (i = 0; i < this->als[0].l - 1; i++) {
         char first_ref = this->als[0].s[i];
-        for (j = 1; j < rec->n_allele; j++)
+        for (j = 1; j < rec->n_allele; j++) {
+            if (this->als[j].s[0] == '*') continue;
             if (i >= this->als[j].l - 1 || this->als[j].s[i] != first_ref) break;
+        }
         if (j < rec->n_allele) break;
     }
     for (j = 0; j < rec->n_allele; j++) {
+        if (this->als[j].s[0] == '*') continue;
         this->als[j].l -= i;
         memmove(this->als[j].s, this->als[j].s + i, this->als[j].l);
     }
@@ -1005,11 +1027,16 @@ static void trim_right(bcf1_realign_t *this) {
     int i, j;
     for (i = 0; i < this->als[0].l - 1; i++) {
         char last_ref = this->als[0].s[this->als[0].l - 1 - i];
-        for (j = 1; j < rec->n_allele; j++)
+        for (j = 1; j < rec->n_allele; j++) {
+            if (this->als[j].s[0] == '*') continue;
             if (i >= this->als[j].l - 1 || this->als[j].s[this->als[j].l - 1 - i] != last_ref) break;
+        }
         if (j < rec->n_allele) break;
     }
-    for (j = 0; j < rec->n_allele; j++) this->als[j].l -= i;
+    for (j = 0; j < rec->n_allele; j++) {
+        if (this->als[j].s[0] == '*') continue;
+        this->als[j].l -= i;
+    }
 }
 
 static void pad_left(bcf1_realign_t *this, int npad) {
@@ -1020,7 +1047,9 @@ static void pad_left(bcf1_realign_t *this, int npad) {
         safe_fetch_sequence(this);
     }
     const char *ptr = &this->ref[rec->pos - this->beg - npad];
-    for (int i = 0; i < rec->n_allele; i++) {
+    int i;
+    for (i = 0; i < rec->n_allele; i++) {
+        if (this->als[i].s[0] == '*') continue;
         ks_resize(&this->als[i], this->als[i].l + npad);
         memmove(this->als[i].s + npad, this->als[i].s, this->als[i].l);
         memcpy(this->als[i].s, ptr, npad);
@@ -1037,7 +1066,11 @@ static void pad_right(bcf1_realign_t *this, int npad) {
         safe_fetch_sequence(this);
     }
     const char *ptr = &this->ref[rec->pos - this->beg + this->als[0].l];
-    for (int i = 0; i < rec->n_allele; i++) kputsn(ptr, npad, &this->als[i]);
+    int i;
+    for (i = 0; i < rec->n_allele; i++) {
+        if (this->als[i].s[0] == '*') continue;
+        kputsn(ptr, npad, &this->als[i]);
+    }
 }
 
 static void pad_from_right(bcf1_realign_t *this, const char *s_ptr, int d) {
@@ -1060,7 +1093,11 @@ static void pad_from_right(bcf1_realign_t *this, const char *s_ptr, int d) {
         s_ptr++;
     }
     const char *ptr = &this->ref[rec->pos - this->beg + this->als[0].l];
-    for (int i = 0; i < rec->n_allele; i++) kputsn(ptr, npad, &this->als[i]);
+    int i;
+    for (i = 0; i < rec->n_allele; i++) {
+        if (this->als[i].s[0] == '*') continue;
+        kputsn(ptr, npad, &this->als[i]);
+    }
 }
 
 static void pad_from_left(bcf1_realign_t *this, const char *s_ptr, int d) {
@@ -1082,7 +1119,9 @@ static void pad_from_left(bcf1_realign_t *this, const char *s_ptr, int d) {
         l_ptr--;
         s_ptr--;
     }
-    for (int i = 0; i < rec->n_allele; i++) {
+    int i;
+    for (i = 0; i < rec->n_allele; i++) {
+        if (this->als[i].s[0] == '*') continue;
         ks_resize(&this->als[i], this->als[i].l + npad);
         memmove(this->als[i].s + npad, this->als[i].s, this->als[i].l);
         memcpy(this->als[i].s, l_ptr, npad);
@@ -1093,7 +1132,8 @@ static void pad_from_left(bcf1_realign_t *this, const char *s_ptr, int d) {
 
 static void initialize_alleles(bcf1_realign_t *this) {
     bcf1_t *rec = this->rec;
-    for (int i = 0; i < rec->n_allele; i++) {
+    int i;
+    for (i = 0; i < rec->n_allele; i++) {
         this->als[i].l = 0;
         kputsn_(rec->d.allele[i], strlen(rec->d.allele[i]), &this->als[i]);
     }
@@ -1114,7 +1154,8 @@ static void initialize_alleles(bcf1_realign_t *this) {
 static void update_alleles(bcf1_realign_t *this) {
     bcf1_t *rec = this->rec;
     kstring_t *str = &this->als[0];
-    for (int i = 1; i < rec->n_allele; i++) {
+    int i;
+    for (i = 1; i < rec->n_allele; i++) {
         kputc_(',', str);
         kputsn_(this->als[i].s, this->als[i].l, str);
     }
@@ -1136,8 +1177,11 @@ static void extend_alleles(bcf1_realign_t *this) {
     }
 
     // find allele pairs that need to be extended
-    for (int i = 0; i < rec->n_allele; i++) {
-        for (int j = i + 1; j < rec->n_allele; j++) {
+    int i, j;
+    for (i = 0; i < rec->n_allele; i++) {
+        if (this->als[i].s[0] == '*') continue;
+        for (j = i + 1; j < rec->n_allele; j++) {
+            if (this->als[j].s[0] == '*') continue;
             if (this->als[i].s[0] != this->als[j].s[0]) pad_left(this, 1);
             if (this->als[i].s[this->als[i].l - 1] != this->als[j].s[this->als[j].l - 1]) pad_right(this, 1);
             if (this->als[i].l == this->als[j].l) continue;
@@ -1162,12 +1206,14 @@ static void extend_alleles(bcf1_realign_t *this) {
 // check whether alleles in the record require extension to avoid ambiguity
 static int is_extension_needed(bcf1_t *rec, int8_t **tmp_arr, int *m_tmp_arr) {
     hts_expand(int8_t, sizeof(int) * rec->n_allele, *m_tmp_arr, *tmp_arr);
-    int *len = (int *)(*tmp_arr);
-    for (int i = 0; i < rec->n_allele; i++) len[i] = strlen(rec->d.allele[i]);
+    int i, j, *len = (int *)(*tmp_arr);
+    for (i = 0; i < rec->n_allele; i++) len[i] = strlen(rec->d.allele[i]);
     if (rec->n_allele == 1 && len[0] == 1) return 1; // covers weird ClinVar cases
 
-    for (int i = 0; i < rec->n_allele; i++) {
-        for (int j = i + 1; j < rec->n_allele; j++) {
+    for (i = 0; i < rec->n_allele; i++) {
+        if (rec->d.allele[i][0] == '*') continue;
+        for (j = i + 1; j < rec->n_allele; j++) {
+            if (rec->d.allele[j][0] == '*') continue;
             if (rec->d.allele[i][0] != rec->d.allele[j][0]) return 1;
             if (rec->d.allele[i][len[i] - 1] != rec->d.allele[j][len[j] - 1]) return 1;
             if (len[i] == len[j]) continue;
@@ -1194,21 +1240,26 @@ static int is_left_aligned(bcf1_t *rec, int8_t **tmp_arr, int *m_tmp_arr) {
     int *len = (int *)(*tmp_arr);
     int i, min_len_is_one = 0;
     for (i = 0; i < rec->n_allele; i++) {
+        if (rec->d.allele[i][0] == '*') continue;
         len[i] = strlen(rec->d.allele[i]);
         if (len[i] == 1) min_len_is_one = 1;
     }
 
     // 1. The alleles end with at least two different nucleotides
     char last_ref = rec->d.allele[0][len[0] - 1];
-    for (i = 0; i < rec->n_allele; i++)
+    for (i = 0; i < rec->n_allele; i++) {
+        if (rec->d.allele[i][0] == '*') continue;
         if (rec->d.allele[i][len[i] - 1] != last_ref) break;
+    }
     if (i == rec->n_allele) return 0;
 
     // 2. The alleles start with at least two different nucleotides, or the shortest allele has length 1
     if (!min_len_is_one) {
         char first_ref = rec->d.allele[0][0];
-        for (i = 0; i < rec->n_allele; i++)
+        for (i = 0; i < rec->n_allele; i++) {
+            if (rec->d.allele[i][0] == '*') continue;
             if (rec->d.allele[i][0] != first_ref) break;
+        }
         if (i == rec->n_allele) return 0;
     }
 
@@ -1220,7 +1271,8 @@ static int liftover_bp(regidx_t *idx, regitr_t *itr, const char *t_chr, hts_pos_
                        int *q_strand) {
     int block_ind = -1;
     if (regidx_overlap(idx, t_chr, (uint32_t)t_pos, (uint32_t)t_pos, itr)) {
-        for (int i = 0; regitr_overlap(itr); i++) {
+        int i;
+        for (i = 0; regitr_overlap(itr); i++) {
             if (i > 0)
                 fprintf(stderr, "Warning: more than one contiguous block overlaps with position %s:%" PRIhts_pos "\n",
                         t_chr, t_pos);
@@ -1326,9 +1378,10 @@ static int liftover_indel(regidx_t *idx, regitr_t *itr, const char *src_chr, hts
 }
 
 static int find_reference(bcf1_t *rec, const bcf_hdr_t *hdr, const char *ref, int is_snp, kstring_t *str) {
-    int swap = -1;
+    int i, swap = -1;
     int ref_len = strlen(ref);
-    for (int i = 0; i < rec->n_allele; i++) {
+    for (i = 0; i < rec->n_allele; i++) {
+        if (rec->d.allele[i][0] == '*') continue;
         int len = strlen(rec->d.allele[i]);
         if (len != ref_len) continue;
         if (ref_len == 1 ? (ref[0] == rec->d.allele[i][0]) : !strncasecmp(ref + 1, rec->d.allele[i] + 1, len - 2)) {
@@ -1350,7 +1403,8 @@ static int find_reference(bcf1_t *rec, const bcf_hdr_t *hdr, const char *ref, in
     // and the anchors are ambiguous (saves ~30% of SNPs from becoming complex variants)
     if (swap < 0 && is_snp && ref_len > 2 && ref_len != strlen(rec->d.allele[0])) {
         int len, left_match, right_match, n_matches = 0;
-        for (int i = 0; i < rec->n_allele; i++) {
+        for (i = 0; i < rec->n_allele; i++) {
+            if (rec->d.allele[i][0] == '*') continue;
             len = strlen(rec->d.allele[i]);
             if (len < ref_len) {
                 left_match = !strncasecmp(ref, rec->d.allele[i], len - 1);
@@ -1382,7 +1436,8 @@ static int find_reference(bcf1_t *rec, const bcf_hdr_t *hdr, const char *ref, in
     if (ref_len > 1) { // don't update if the variant is a SNP
         char ref5 = ref[0];
         char ref3 = ref[ref_len - 1];
-        for (int i = 0; i < rec->n_allele; i++) {
+        for (i = 0; i < rec->n_allele; i++) {
+            if (rec->d.allele[i][0] == '*') continue;
             int len = strlen(rec->d.allele[i]);
             rec->d.allele[i][len - 1] = ref3;
             rec->d.allele[i][0] = ref5;
@@ -1395,7 +1450,7 @@ static int find_reference(bcf1_t *rec, const bcf_hdr_t *hdr, const char *ref, in
             str->l = 0;
             kputsn_(ref, ref_len, str);
             kputc_(',', str);
-            for (int i = 0; i < rec->n_allele; i++) {
+            for (i = 0; i < rec->n_allele; i++) {
                 char *allele = rec->d.allele[i];
                 kputsn_(allele, strlen(allele), str);
                 kputc_(',', str);
@@ -1541,11 +1596,13 @@ static int get_shift(char *path, int npad) {
 static void clip_pad(bcf1_t *rec, const char *ref, char *pad, int npad, hts_pos_t *pos5, hts_pos_t *pos3,
                      kstring_t *str, int write_nw) {
     int score = INT32_MIN;
-    int shift = 0;
+    int i, shift = 0;
     kstring_t path = {0, 0, NULL};
     kstring_t nw_s = {0, 0, NULL};
 
-    for (int i = 0; i < rec->n_allele; i++) {
+    for (i = 0; i < rec->n_allele; i++) {
+        if (rec->d.allele[i][0] == '*') continue;
+
         // generate source reference sequence
         str->l = 0;
         if (npad < 0) {
@@ -1602,11 +1659,12 @@ static void clip_pad(bcf1_t *rec, const char *ref, char *pad, int npad, hts_pos_
 // this function updates FORMAT/GT records if the number or order of alleles has changed
 static void update_genotypes(const bcf_hdr_t *hdr, bcf1_t *rec, int int_id, int swap, int32_t **int32_arr,
                              int *m_int32_arr) {
+    int i;
     if (swap < 0) {
         int ngt = bcf_get_genotypes(args->out_hdr, rec, &args->int32_arr, &args->m_int32_arr);
         if (ngt <= 0) return;
         int *gts = (int *)(args->int32_arr);
-        for (int i = 0; i < ngt; i++)
+        for (i = 0; i < ngt; i++)
             if (!bcf_gt_is_missing(gts[i]) && !(gts[i] == bcf_int32_vector_end)) gts[i] += 2;
         bcf_update_genotypes(hdr, rec, gts, ngt);
     } else {
@@ -1616,7 +1674,7 @@ static void update_genotypes(const bcf_hdr_t *hdr, bcf1_t *rec, int int_id, int 
 #define BRANCH(type_t)                                                                                                 \
     {                                                                                                                  \
         type_t *p = (type_t *)fmt->p;                                                                                  \
-        for (int i = 0; i < n; i++) {                                                                                  \
+        for (i = 0; i < n; i++) {                                                                                      \
             if (bcf_gt_allele(p[i]) == 0)                                                                              \
                 p[i] += 2 * swap;                                                                                      \
             else if (bcf_gt_allele(p[i]) == swap)                                                                      \
@@ -1641,7 +1699,8 @@ static void update_genotypes(const bcf_hdr_t *hdr, bcf1_t *rec, int int_id, int 
 }
 
 static void update_ploidy(const bcf_hdr_t *hdr, bcf1_t *rec, int int_id, int *ploidy_arr) {
-    for (int i = 0; i < bcf_hdr_nsamples(hdr); i++) ploidy_arr[i] = 2;
+    int i, j;
+    for (i = 0; i < bcf_hdr_nsamples(hdr); i++) ploidy_arr[i] = 2;
     bcf_fmt_t *fmt = bcf_get_fmt_id(rec, int_id);
     if (!fmt) {
         return;
@@ -1651,9 +1710,9 @@ static void update_ploidy(const bcf_hdr_t *hdr, bcf1_t *rec, int int_id, int *pl
 #define BRANCH(type_t, vector_end)                                                                                     \
     {                                                                                                                  \
         type_t *p = (type_t *)fmt->p;                                                                                  \
-        for (int i = 0; i < rec->n_sample; i++) {                                                                      \
+        for (i = 0; i < rec->n_sample; i++) {                                                                          \
             ploidy_arr[i] = fmt->n;                                                                                    \
-            for (int j = 0; j < fmt->n; j++)                                                                           \
+            for (j = 0; j < fmt->n; j++)                                                                               \
                 if (p[j] == vector_end) {                                                                              \
                     ploidy_arr[i] = j;                                                                                 \
                     break;                                                                                             \
@@ -1681,7 +1740,7 @@ static void update_ploidy(const bcf_hdr_t *hdr, bcf1_t *rec, int int_id, int *pl
 
 static void update_genotype_record(const bcf_hdr_t *hdr, bcf1_t *rec, int int_id, int coltype, int swap,
                                    int8_t **tmp_arr, int *m_tmp_arr) {
-    int n, type, len;
+    int i, n, type, len;
     void *p;
     const char *key = bcf_hdr_int2id(hdr, BCF_DT_ID, int_id);
     int field_type = bcf_hdr_id2type(hdr, coltype, int_id);
@@ -1710,7 +1769,7 @@ static void update_genotype_record(const bcf_hdr_t *hdr, bcf1_t *rec, int int_id
     {                                                                                                                  \
         type_t *src = (type_t *)p;                                                                                     \
         int32_t *dst = (int32_t *)(*tmp_arr);                                                                          \
-        for (int i = 0; i < n * len; i++) {                                                                            \
+        for (i = 0; i < n * len; i++) {                                                                                \
             if (is_missing)                                                                                            \
                 *dst = bcf_int32_missing;                                                                              \
             else if (is_vector_end)                                                                                    \
@@ -1744,7 +1803,7 @@ static void update_genotype_record(const bcf_hdr_t *hdr, bcf1_t *rec, int int_id
 #define BRANCH(type_t)                                                                                                 \
     {                                                                                                                  \
         type_t *ptr = (type_t *)p;                                                                                     \
-        for (int i = 0; i < n * len; i++) {                                                                            \
+        for (i = 0; i < n * len; i++) {                                                                                \
             if (ptr[i] == 0)                                                                                           \
                 ptr[i] = swap;                                                                                         \
             else if (ptr[i] == swap)                                                                                   \
@@ -1776,7 +1835,7 @@ static void update_genotype_record(const bcf_hdr_t *hdr, bcf1_t *rec, int int_id
 // it does not currently support Number=G for Type=Character/Type=String
 static void update_AGR_record(const bcf_hdr_t *hdr, bcf1_t *rec, int int_id, int coltype, int swap, int8_t **tmp_arr,
                               int *m_tmp_arr) {
-    int n, type, len;
+    int i, j, k, n, type, len;
     void *p;
     int n_als = rec->n_allele;
     int length = bcf_hdr_id2length(hdr, coltype, int_id);
@@ -1815,11 +1874,11 @@ static void update_AGR_record(const bcf_hdr_t *hdr, bcf1_t *rec, int int_id, int
     {                                                                                                                  \
         type_t *src = (type_t *)p;                                                                                     \
         out_type_t *dst = (out_type_t *)(*tmp_arr);                                                                    \
-        for (int i = 0; i < n; i++) {                                                                                  \
-            for (int j = 0; j < n_als; j++) {                                                                          \
+        for (i = 0; i < n; i++) {                                                                                      \
+            for (j = 0; j < n_als; j++) {                                                                              \
                 set_missing;                                                                                           \
                 dst++;                                                                                                 \
-                for (int k = 0; k < j; k++) {                                                                          \
+                for (k = 0; k < j; k++) {                                                                              \
                     if (is_missing)                                                                                    \
                         set_missing;                                                                                   \
                     else if (is_vector_end)                                                                            \
@@ -1874,10 +1933,10 @@ static void update_AGR_record(const bcf_hdr_t *hdr, bcf1_t *rec, int int_id, int
     {                                                                                                                  \
         type_t *src = (type_t *)p;                                                                                     \
         out_type_t *dst = (out_type_t *)(*tmp_arr);                                                                    \
-        for (int i = 0; i < n; i++) {                                                                                  \
+        for (i = 0; i < n; i++) {                                                                                      \
             set_missing;                                                                                               \
             dst++;                                                                                                     \
-            for (int j = 0; j < len; j++) {                                                                            \
+            for (j = 0; j < len; j++) {                                                                                \
                 if (is_missing)                                                                                        \
                     set_missing;                                                                                       \
                 else if (is_vector_end)                                                                                \
@@ -1908,7 +1967,7 @@ static void update_AGR_record(const bcf_hdr_t *hdr, bcf1_t *rec, int int_id, int
                 break;
             case BCF_BT_CHAR:
                 s = (char *)(*tmp_arr);
-                for (int i = 0; i < n; i++) {
+                for (i = 0; i < n; i++) {
                     *s++ = '.';
                     *s++ = ',';
                     memcpy(s, p, len);
@@ -1941,16 +2000,16 @@ static void update_AGR_record(const bcf_hdr_t *hdr, bcf1_t *rec, int int_id, int
 #define BRANCH(type_t)                                                                                                 \
     {                                                                                                                  \
         type_t *ptr = (type_t *)p;                                                                                     \
-        for (int i = 0; i < n; i++) {                                                                                  \
+        for (i = 0; i < n; i++) {                                                                                      \
             type_t tmp = ptr[0];                                                                                       \
             ptr[0] = ptr[swap * (swap + 3) / 2];                                                                       \
             ptr[swap * (swap + 3) / 2] = tmp;                                                                          \
-            for (int j = 1; j < swap; j++) {                                                                           \
+            for (j = 1; j < swap; j++) {                                                                               \
                 tmp = ptr[j * (j + 1) / 2];                                                                            \
                 ptr[j * (j + 1) / 2] = ptr[swap * (swap + 1) / 2 + j];                                                 \
                 ptr[swap * (swap + 1) / 2 + j] = tmp;                                                                  \
             }                                                                                                          \
-            for (int j = swap + 1; j < n_als; j++) {                                                                   \
+            for (j = swap + 1; j < n_als; j++) {                                                                       \
                 tmp = ptr[j * (j + 1) / 2 + swap];                                                                     \
                 ptr[j * (j + 1) / 2 + swap] = ptr[j * (j + 1) / 2];                                                    \
                 ptr[j * (j + 1) / 2] = tmp;                                                                            \
@@ -1994,7 +2053,7 @@ static void update_AGR_record(const bcf_hdr_t *hdr, bcf1_t *rec, int int_id, int
 #define BRANCH(type_t)                                                                                                 \
     {                                                                                                                  \
         type_t *ptr = (type_t *)p;                                                                                     \
-        for (int i = 0; i < n; i++) {                                                                                  \
+        for (i = 0; i < n; i++) {                                                                                      \
             type_t tmp = ptr[0];                                                                                       \
             ptr[0] = ptr[swap];                                                                                        \
             ptr[swap] = tmp;                                                                                           \
@@ -2016,12 +2075,12 @@ static void update_AGR_record(const bcf_hdr_t *hdr, bcf1_t *rec, int int_id, int
                 break;
             case BCF_BT_CHAR:
                 s = (char *)(*tmp_arr);
-                for (int i = 0; i < n; i++) {
+                for (i = 0; i < n; i++) {
                     memcpy(s, p, len);
                     char *ptr1 = strchr(s, ',');
                     if (!ptr1) error("Error: string %s contains less then %d elements", s, n_als);
                     char *ptr2 = ptr1;
-                    for (int j = 1; ptr2 && j < swap; j++) ptr2 = strchr(ptr2 + 1, ',');
+                    for (j = 1; ptr2 && j < swap; j++) ptr2 = strchr(ptr2 + 1, ',');
                     if (!ptr2) error("Error: string %s contains less then %d elements", s, n_als);
                     char *ptr3 = swap == n_als - 1 ? s + len : strchr(ptr2 + 1, ',');
                     if (!ptr3) error("Error: string %s contains less then %d elements", s, n_als);
@@ -2046,7 +2105,7 @@ static void update_AGR_record(const bcf_hdr_t *hdr, bcf1_t *rec, int int_id, int
 // this function updates INFO/FORMAT Number=A Type=Integer/Float records if the number or order of alleles has changed
 static void reverse_A_record(const bcf_hdr_t *hdr, bcf1_t *rec, int int_id, int coltype, int *sum, int swap,
                              int8_t **tmp_arr, int *m_tmp_arr) {
-    int n, type, len;
+    int i, j, n, type, len;
     void *p;
     int n_als = rec->n_allele;
     int length = bcf_hdr_id2length(hdr, coltype, int_id);   // it should be BCF_VL_A
@@ -2082,10 +2141,10 @@ static void reverse_A_record(const bcf_hdr_t *hdr, bcf1_t *rec, int int_id, int 
     {                                                                                                                  \
         type_t *src = (type_t *)p;                                                                                     \
         out_type_t *dst = (out_type_t *)(*tmp_arr);                                                                    \
-        for (int i = 0; i < n; i++) {                                                                                  \
+        for (i = 0; i < n; i++) {                                                                                      \
             out_type_t value = (out_type_t)sum[i];                                                                     \
             out_type_t *swap_dst = swap < 0 ? dst++ : &dst[swap - 1];                                                  \
-            for (int j = 0; j < len; j++) {                                                                            \
+            for (j = 0; j < len; j++) {                                                                                \
                 if (is_missing)                                                                                        \
                     set_missing;                                                                                       \
                 else if (is_vector_end)                                                                                \
@@ -2132,7 +2191,7 @@ static void reverse_A_record(const bcf_hdr_t *hdr, bcf1_t *rec, int int_id, int 
 
 // this function updates INFO/FORMAT records if the number or order of alleles has changed
 static void flip_A_record(const bcf_hdr_t *hdr, bcf1_t *rec, int int_id, int coltype, int swap) {
-    int n, type, len;
+    int i, j, n, type, len;
     float *p;
     int n_als = rec->n_allele;
     int length = bcf_hdr_id2length(hdr, coltype, int_id);
@@ -2164,7 +2223,7 @@ static void flip_A_record(const bcf_hdr_t *hdr, bcf1_t *rec, int int_id, int col
 #define BRANCH(type_t, easy_access)                                                                                    \
     {                                                                                                                  \
         type_t *ptr = (type_t *)p;                                                                                     \
-        for (int i = 0; i < n; i++) {                                                                                  \
+        for (i = 0; i < n; i++) {                                                                                      \
             ptr[swap - 1] = -ptr[swap - 1];                                                                            \
             ptr += len;                                                                                                \
         }                                                                                                              \
@@ -2188,11 +2247,11 @@ static void flip_A_record(const bcf_hdr_t *hdr, bcf1_t *rec, int int_id, int col
         break;
     case BCF_BT_CHAR:
         s = (char *)p;
-        for (int i = 0; i < n; i++) {
+        for (i = 0; i < n; i++) {
             char *ptr = s;
             if (swap > 1) {
                 ptr = strchr(ptr, ',');
-                for (int j = 0; ptr && j < swap - 2; j++) ptr = strchr(ptr + 1, ',');
+                for (j = 0; ptr && j < swap - 2; j++) ptr = strchr(ptr + 1, ',');
                 ptr++;
             }
             while (ptr < s + len && *ptr != ',') {
@@ -2212,8 +2271,10 @@ static void flip_A_record(const bcf_hdr_t *hdr, bcf1_t *rec, int int_id, int col
 }
 
 static inline int bcf_is_symbolic(const bcf1_t *rec) {
-    for (int i = 0; i < rec->n_allele; i++)
-        if (rec->d.allele[i][0] == '<' || rec->d.allele[i][0] == '*') return 1;
+    if (rec->d.allele[0][0] == '*') return 1;
+    int i;
+    for (i = 0; i < rec->n_allele; i++)
+        if (rec->d.allele[i][0] == '<') return 1;
     return 0;
 }
 
@@ -2222,7 +2283,7 @@ static inline int bcf_is_symbolic(const bcf1_t *rec) {
  ****************************************/
 
 bcf1_t *process(bcf1_t *rec) {
-    int is_snp = bcf_is_snp(rec);
+    int i, is_snp = bcf_is_snp(rec);
     int is_symbolic = bcf_is_symbolic(rec);
     if (is_symbolic && !args->warning_symbolic) {
         fprintf(stderr, "Warning: input VCF includes symbolic alleles that might not properly lift over\n");
@@ -2233,7 +2294,7 @@ bcf1_t *process(bcf1_t *rec) {
     hts_pos_t src_pos = rec->pos + 1;
     if (args->reject_fh || args->write_src) {
         args->tmp_kstr.l = 0;
-        for (int i = 0; i < rec->n_allele; i++) {
+        for (i = 0; i < rec->n_allele; i++) {
             char *allele = rec->d.allele[i];
             int len = strlen(allele);
             kputsn_(allele, len, &args->tmp_kstr);
@@ -2247,7 +2308,7 @@ bcf1_t *process(bcf1_t *rec) {
     int dst_rid = -1;
     hts_pos_t dst_pos5 = -1; // 1-based coordinate system
     hts_pos_t dst_pos3 = -1; // 1-based coordinate system
-    int ret, strand, is_difficult_snp = 0, npad = 0;
+    int ret = 0, strand, is_difficult_snp = 0, npad = 0;
     if (args->idx) {
         ret = liftover_bp(args->idx, args->itr, src_chr, rec->pos + 1, &dst_rid, &dst_pos5, &strand);
         dst_pos3 = dst_pos5;
@@ -2326,7 +2387,7 @@ bcf1_t *process(bcf1_t *rec) {
     // flip alleles
     if (strand) {
         bcf_update_info_flag(args->out_hdr, rec, args->flip_tag, NULL, 1);
-        for (int i = 0; i < rec->n_allele; i++) {
+        for (i = 0; i < rec->n_allele; i++) {
             char *allele = rec->d.allele[i];
             if (allele[0] != '<' && allele[0] != '*') reverse_complement(allele);
         }
@@ -2419,7 +2480,7 @@ bcf1_t *process(bcf1_t *rec) {
     }
     int af = 1;
 
-    for (int i = 0; i < args->n_tags; i++) {
+    for (i = 0; i < args->n_tags; i++) {
         tag_t *tag = &args->tags[i];
 
         int field_type = bcf_hdr_id2type(args->out_hdr, tag->coltype, tag->int_id);
@@ -2478,7 +2539,8 @@ void destroy(void) {
     free(args->ploidy_arr);
     free(args->tmp_kstr.s);
     free(args->tmp_pad.s);
-    for (int i = 0; i < args->m_tmp_als; i++) free(args->tmp_als[i].s);
+    int i;
+    for (i = 0; i < args->m_tmp_als; i++) free(args->tmp_als[i].s);
     free(args->tmp_als);
     free(args->tmp_arr);
     free(args->int32_arr);

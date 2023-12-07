@@ -37,7 +37,7 @@
 #include "filter.h"
 #include "cholmod.h"
 
-#define PGS_VERSION "2023-09-19"
+#define PGS_VERSION "2023-12-06"
 
 #define AVERAGE_LD_SCORE_DFLT 72.6
 #define EXPECTED_RATIO_DFLT 0.6
@@ -205,7 +205,8 @@ KSORT_INIT_GENERIC(double)
 double get_median(const double *v, int n, int shift) {
     if (n == 0) return NAN;
     double *w = (double *)malloc(n * sizeof(double));
-    for (int i = 0; i < n; i++) w[i] = v[i * shift];
+    int i;
+    for (i = 0; i < n; i++) w[i] = v[i * shift];
     double ret = ks_ksmall_double((size_t)n, w, (size_t)n / 2);
     if (n % 2 == 0) ret = (ret + w[n / 2 - 1]) * 0.5f;
     free(w);
@@ -216,7 +217,8 @@ double get_median(const double *v, int n, int shift) {
 double get_median2(const double *v, int n, int shift) {
     if (n == 0) return NAN;
     double *w = (double *)malloc(n * sizeof(double));
-    for (int i = 0; i < n; i++) w[i] = v[i * shift] * v[i * shift];
+    int i;
+    for (i = 0; i < n; i++) w[i] = v[i * shift] * v[i * shift];
     double ret = ks_ksmall_double((size_t)n, w, (size_t)n / 2);
     if (n % 2 == 0) ret = (ret + w[n / 2 - 1]) * 0.5f;
     free(w);
@@ -322,41 +324,44 @@ static inline void add_matrix(const coo_matrix_t *S, coo_matrix_t *P) {
     if (S->nrow != P->nrow) error("Error: Sigma and Precision matrix have different dimensions\n");
 
     // add diagonal elements
-    int n = S->nrow > S->m_d ? S->m_d : S->nrow;
+    int k, n = S->nrow > S->m_d ? S->m_d : S->nrow;
     hts_expand0(double, n, P->m_d, P->d);
-    for (int k = 0; k < n; k++) P->d[k] += S->d[k];
+    for (k = 0; k < n; k++) P->d[k] += S->d[k];
 
     // add non-diagonal elements
-    for (int k = 0; k < S->nnz; k++) append_nnz(S->cell[k].i, S->cell[k].j, S->cell[k].x, P);
+    for (k = 0; k < S->nnz; k++) append_nnz(S->cell[k].i, S->cell[k].j, S->cell[k].x, P);
 }
 
 // return A ./ x
 static inline void matdiv(coo_matrix_t *A, double x) {
-    int n = A->nrow > A->m_d ? A->m_d : A->nrow;
-    for (int k = 0; k < n; k++) A->d[k] /= x;
-    for (int k = 0; k < A->nnz; k++) A->cell[k].x /= x;
+    int k, n = A->nrow > A->m_d ? A->m_d : A->nrow;
+    for (k = 0; k < n; k++) A->d[k] /= x;
+    for (k = 0; k < A->nnz; k++) A->cell[k].x /= x;
 }
 
 // return A * x for square matrices with diagonal elements
 static inline void sdmult(const csr_matrix_t *A, const double *x, double *y) {
-    for (int i = 0; i < A->nrow; i++) {
+    int i, j;
+    for (i = 0; i < A->nrow; i++) {
         y[i] = A->d[i] * x[i];
-        for (int j = A->p[i]; j < A->p[i + 1]; j++) y[i] += A->x[j] * x[A->j[j]];
+        for (j = A->p[i]; j < A->p[i + 1]; j++) y[i] += A->x[j] * x[A->j[j]];
     }
 }
 
 // return A * x for rectangular matrices without diagonal elements
 static inline void rect_sdmult(const csr_matrix_t *A, const double *x, double *y) {
-    for (int i = 0; i < A->nrow; i++) {
+    int i, j;
+    for (i = 0; i < A->nrow; i++) {
         y[i] = 0.0;
-        for (int j = A->p[i]; j < A->p[i + 1]; j++) y[i] += A->x[j] * x[A->j[j]];
+        for (j = A->p[i]; j < A->p[i + 1]; j++) y[i] += A->x[j] * x[A->j[j]];
     }
 }
 
 // return x' * y
 static inline double dot(const double *x, const double *y, int n) {
     double ret = 0.0;
-    for (int i = 0; i < n; i++) ret += x[i] * y[i];
+    int i;
+    for (i = 0; i < n; i++) ret += x[i] * y[i];
     return ret;
 }
 
@@ -366,7 +371,7 @@ static inline double dot(const double *x, const double *y, int n) {
 // https://en.wikipedia.org/wiki/Conjugate_gradient_method#The_preconditioned_conjugate_gradient_method
 // alternative approach to https://github.com/awohns/ldgm/blob/main/MATLAB/precisionDivide.m
 static int pcg(const csr_matrix_t *A, double *x, double tol, int jacobi) {
-    int iter, n = A->nrow;
+    int i, iter, n = A->nrow;
     double rsold, rsnew, tol2 = tol * tol;
     double *p = (double *)malloc(sizeof(double) * n);
     double *r = (double *)malloc(sizeof(double) * n);
@@ -374,22 +379,22 @@ static int pcg(const csr_matrix_t *A, double *x, double tol, int jacobi) {
     double *z = jacobi ? (double *)malloc(sizeof(double) * n) : r;
 
     sdmult(A, x, Ap);
-    for (int i = 0; i < n; i++) r[i] = x[i] - Ap[i];
+    for (i = 0; i < n; i++) r[i] = x[i] - Ap[i];
     if (jacobi)
-        for (int i = 0; i < n; i++) z[i] = r[i] / A->d[i]; // Jacobi preconditioning
-    for (int i = 0; i < n; i++) p[i] = z[i];
+        for (i = 0; i < n; i++) z[i] = r[i] / A->d[i]; // Jacobi preconditioning
+    for (i = 0; i < n; i++) p[i] = z[i];
     rsold = dot(r, z, n);
     for (iter = 0; iter < n; iter++) {
         sdmult(A, p, Ap);
         double alpha = rsold / dot(p, Ap, n);
-        for (int i = 0; i < n; i++) x[i] += alpha * p[i];
-        for (int i = 0; i < n; i++) r[i] -= alpha * Ap[i];
+        for (i = 0; i < n; i++) x[i] += alpha * p[i];
+        for (i = 0; i < n; i++) r[i] -= alpha * Ap[i];
         if (jacobi)
-            for (int i = 0; i < n; i++) z[i] = r[i] / A->d[i]; // Jacobi preconditioning
+            for (i = 0; i < n; i++) z[i] = r[i] / A->d[i]; // Jacobi preconditioning
         rsnew = dot(r, z, n);
         if (rsnew < tol2) break;
         double beta = rsnew / rsold;
-        for (int i = 0; i < n; i++) p[i] = z[i] + beta * p[i];
+        for (i = 0; i < n; i++) p[i] = z[i] + beta * p[i];
         rsold = rsnew;
     }
 
@@ -403,15 +408,15 @@ static int pcg(const csr_matrix_t *A, double *x, double tol, int jacobi) {
 // see https://github.com/awohns/ldgm/blob/main/MATLAB/precisionMultiply.m
 // computes x = (P/P00)y where P = [P00, P01; P10, P11] and P/P00 is the Schur complement
 // https://en.wikipedia.org/wiki/Schur_complement
-static int precision_multiply(const csr_matrix_t schur[][2], const double *y1, double tol, int jacobi, double *x1) {
+static int precision_multiply(csr_matrix_t schur[][2], const double *y1, double tol, int jacobi, double *x1) {
     int n0 = schur[0][0].nrow;
     int n1 = schur[1][1].nrow;
     double *tmp = (double *)malloc(sizeof(double) * (n0 > n1 ? n0 : n1));
     rect_sdmult(&schur[0][1], y1, tmp);
-    int n_iter = pcg(&schur[0][0], tmp, tol, jacobi);
+    int i, n_iter = pcg(&schur[0][0], tmp, tol, jacobi);
     rect_sdmult(&schur[1][0], tmp, x1);
     sdmult(&schur[1][1], y1, tmp);
-    for (int i = 0; i < n1; i++) x1[i] = tmp[i] - x1[i];
+    for (i = 0; i < n1; i++) x1[i] = tmp[i] - x1[i];
     free(tmp);
     return n_iter;
 }
@@ -474,14 +479,16 @@ static inline void ld_block_clear(ld_block_t *block) {
     block->n_node2row = 0;
     memset((void *)block->node2row, 0, sizeof(int) * block->m_node2row);
     coo_clear(&block->coo);
-    for (int k = 0; k < 4; k++) coo_clear(&block->coo_schur[k / 2][k % 2]);
+    int k;
+    for (k = 0; k < 4; k++) coo_clear(&block->coo_schur[k / 2][k % 2]);
 }
 
 static inline void ld_block_destroy(ld_block_t *block) {
     free(block->rows);
     free(block->node2row);
     coo_destroy(&block->coo);
-    for (int k = 0; k < 4; k++) coo_destroy(&block->coo_schur[k / 2][k % 2]);
+    int k;
+    for (k = 0; k < 4; k++) coo_destroy(&block->coo_schur[k / 2][k % 2]);
     free(block->schur_imap);
 }
 
@@ -490,7 +497,8 @@ static void bcf_remove_format(bcf1_t *line) {
     // remove all FORMAT fields
     if (!(line->unpacked & BCF_UN_FMT)) bcf_unpack(line, BCF_UN_FMT);
 
-    for (int i = 0; i < line->n_fmt; i++) {
+    int i;
+    for (i = 0; i < line->n_fmt; i++) {
         bcf_fmt_t *fmt = &line->d.fmt[i];
         if (fmt->p_free) {
             free(fmt->p - fmt->p_off);
@@ -506,8 +514,8 @@ static void bcf_remove_format(bcf1_t *line) {
 // use ES/SE if available
 // use -qnorm(10^-LP/2) * sign(ES) if available
 static inline void check_gwas(bcf_hdr_t *hdr) {
-    int id[SIZE];
-    for (int idx = 0; idx < SIZE; idx++) {
+    int idx, id[SIZE];
+    for (idx = 0; idx < SIZE; idx++) {
         id[idx] = bcf_hdr_id2int(hdr, BCF_DT_ID, id_str[idx]);
         if (!bcf_hdr_idinfo_exists(hdr, BCF_HL_FMT, id[idx])) id[idx] = -1;
     }
@@ -520,7 +528,8 @@ static inline void check_gwas(bcf_hdr_t *hdr) {
 // verify a LDGM-VCF file header is compliant
 static inline void check_ldgm(bcf_hdr_t *hdr) {
     static const char *info[] = {"AA", "AF", "LD_block", "LD_node", "LD_diagonal", "LD_neighbors", "LD_weights"};
-    for (int i = 0; i < sizeof(info) / sizeof(char *); i++)
+    int i;
+    for (i = 0; i < sizeof(info) / sizeof(char *); i++)
         if (!bcf_hdr_idinfo_exists(hdr, BCF_HL_INFO, bcf_hdr_id2int(hdr, BCF_DT_ID, info[i])))
             error("Error: The INFO field %s is not defined in the header of the LDGM-VCF precision matrix file\n",
                   info[i]);
@@ -528,12 +537,12 @@ static inline void check_ldgm(bcf_hdr_t *hdr) {
 
 static inline int filter_test_with_logic(filter_t *filter, bcf1_t *line, uint8_t **smpl_pass, int filter_logic) {
     if (!filter) return 1;
-    int pass = filter_test(filter, line, (const uint8_t **)smpl_pass);
+    int i, pass = filter_test(filter, line, (const uint8_t **)smpl_pass);
     if (filter_logic & FLT_EXCLUDE) {
         if (pass) {
             pass = 0;
             if (!(*smpl_pass)) return pass;
-            for (int i = 0; i < line->n_sample; i++)
+            for (i = 0; i < line->n_sample; i++)
                 if ((*smpl_pass)[i])
                     (*smpl_pass)[i] = 0;
                 else {
@@ -543,7 +552,7 @@ static inline int filter_test_with_logic(filter_t *filter, bcf1_t *line, uint8_t
         } else {
             pass = 1;
             if ((*smpl_pass))
-                for (int i = 0; i < line->n_sample; i++) (*smpl_pass)[i] = 1;
+                for (i = 0; i < line->n_sample; i++) (*smpl_pass)[i] = 1;
         }
     }
     return pass;
@@ -551,6 +560,7 @@ static inline int filter_test_with_logic(filter_t *filter, bcf1_t *line, uint8_t
 
 static int read_ld_block(bcf_srs_t *sr, ld_block_t *blocks, int n_pops, double alpha_param, line_t **lines,
                          int *n_lines, int *m_lines, filter_t *filter, int filter_logic) {
+    int pop, idx, i, k;
     int *int_arr = (int *)calloc(sizeof(int), 1);
     int n_int_arr, m_int_arr = 1;
     float *float_arr = NULL;
@@ -569,7 +579,7 @@ static int read_ld_block(bcf_srs_t *sr, ld_block_t *blocks, int n_pops, double a
     int block_ended = 0;
     int curr_ld_block = -1;
     int ret = bcf_sr_has_line(sr, 0);
-    for (int pop = 0; pop < n_pops; pop++) {
+    for (pop = 0; pop < n_pops; pop++) {
         ret += bcf_sr_has_line(sr, 1 + pop);
         ld_block_clear(&blocks[pop]);
     }
@@ -587,13 +597,13 @@ static int read_ld_block(bcf_srs_t *sr, ld_block_t *blocks, int n_pops, double a
         if (pass) {
             // check if the VCF line has enough information to compute the Z-score
             bcf_fmt_t *fmt[SIZE];
-            for (int idx = 0; idx < SIZE; idx++) fmt[idx] = bcf_get_fmt(hdr, line, id_str[idx]);
+            for (idx = 0; idx < SIZE; idx++) fmt[idx] = bcf_get_fmt(hdr, line, id_str[idx]);
 
-            for (int pop = 0; pop < n_pops; pop++) {
+            for (pop = 0; pop < n_pops; pop++) {
                 int pop_ind = blocks[pop].imap;
                 int ind_pass = !smpl_pass || smpl_pass[pop_ind];
                 double val[SIZE];
-                for (int idx = 0; idx < SIZE; idx++)
+                for (idx = 0; idx < SIZE; idx++)
                     if (ind_pass && fmt[idx] && !bcf_float_is_missing(((float *)fmt[idx]->p)[pop_ind])
                         && !bcf_float_is_vector_end(((float *)fmt[idx]->p)[pop_ind]))
                         val[idx] = (double)((float *)fmt[idx]->p)[pop_ind];
@@ -618,7 +628,7 @@ static int read_ld_block(bcf_srs_t *sr, ld_block_t *blocks, int n_pops, double a
                 ne[pop] = val[NE];
             }
         } else {
-            for (int pop = 0; pop < n_pops; pop++) {
+            for (pop = 0; pop < n_pops; pop++) {
                 ez[pop] = NAN;
                 lp[pop] = NAN;
                 ne[pop] = NAN;
@@ -627,7 +637,7 @@ static int read_ld_block(bcf_srs_t *sr, ld_block_t *blocks, int n_pops, double a
 
         // load LDGM-VCF data
         int save_line = 0;
-        for (int pop = 0; pop < n_pops; pop++) {
+        for (pop = 0; pop < n_pops; pop++) {
             if (!bcf_sr_has_line(sr, 1 + pop)) continue; // no line in the LDGM-VCF file
             line = bcf_sr_get_line(sr, 1 + pop);
             hdr = bcf_sr_get_header(sr, 1 + pop);
@@ -659,13 +669,13 @@ static int read_ld_block(bcf_srs_t *sr, ld_block_t *blocks, int n_pops, double a
                       (bcf_sr_get_reader(sr, 1 + pop))->fname, bcf_seqname(hdr, line), (int64_t)line->pos + 1);
             ld_diagonal = float_arr[0];
             n_int_arr = bcf_get_info_int32(hdr, line, "LD_neighbors", &int_arr, &m_int_arr);
-            for (int i = 0; i < n_int_arr; i++)
+            for (i = 0; i < n_int_arr; i++)
                 if (int_arr[i] <= ld_node)
                     error("Error: LD_neighbors INFO field from file %s is nonconformal at %s:%" PRId64 "\n",
                           (bcf_sr_get_reader(sr, 1 + pop))->fname, bcf_seqname(hdr, line), (int64_t)line->pos + 1);
             n_float_arr = bcf_get_info_float(hdr, line, "LD_weights", &float_arr, &m_float_arr);
             //      this currently happens, though really it should not
-            //      for (int i=0; i<n_float_arr; i++)
+            //      for (i=0; i<n_float_arr; i++)
             //        if (float_arr[i] == 0.0f)
             //          error("Error: LD_weights INFO field is nonconformal at %s:%"PRId64"\n", bcf_seqname(hdr, line),
             //          (int64_t)line->pos+1);
@@ -712,7 +722,7 @@ static int read_ld_block(bcf_srs_t *sr, ld_block_t *blocks, int n_pops, double a
                 }
 
                 append_diag(block->coo.nrow, (double)ld_diagonal, &block->coo);
-                for (int i = 0; i < n_int_arr; i++) {
+                for (i = 0; i < n_int_arr; i++) {
                     if (float_arr[i] == 0.0f)
                         continue; // there should not be need for this check once they fix the LDGM precision matrices
                     append_nnz(ld_node, int_arr[i], (double)float_arr[i], &block->coo);
@@ -732,7 +742,7 @@ static int read_ld_block(bcf_srs_t *sr, ld_block_t *blocks, int n_pops, double a
         }
         if (ret > bcf_sr_has_line(sr, 0)) {
             block_started = 0;
-            for (int pop = 0; pop < n_pops; pop++) {
+            for (pop = 0; pop < n_pops; pop++) {
                 blocks[pop].seqname = bcf_hdr_id2name(hdr, line->rid);
                 blocks[pop].ld_block = curr_ld_block;
             }
@@ -752,14 +762,14 @@ static int read_ld_block(bcf_srs_t *sr, ld_block_t *blocks, int n_pops, double a
         }
     } while (!block_ended && (ret = bcf_sr_next_line(sr)));
 
-    for (int pop = 0; pop < n_pops; pop++) {
+    for (pop = 0; pop < n_pops; pop++) {
         ld_block_t *block = &blocks[pop];
         block->row_ptr = pop == 0 ? 0 : blocks[pop - 1].row_ptr + blocks[pop - 1].coo.nrow;
 
         // compute number of missing rows from the summary statistics and average sample size
         block->mean_neff = 0.0;
         int l = 0;
-        for (int k = 0; k < block->coo.nrow; k++) {
+        for (k = 0; k < block->coo.nrow; k++) {
             row_t *row = &block->rows[k];
             if (row->n_line == 0)
                 block->n_missing++;
@@ -773,7 +783,7 @@ static int read_ld_block(bcf_srs_t *sr, ld_block_t *blocks, int n_pops, double a
         block->all_n_non_missing += block->coo.nrow - block->n_missing;
 
         // compress all LDGM edges so that they refer to rows rather than LD nodes
-        for (int k = 0; k < block->coo.nnz; k++) {
+        for (k = 0; k < block->coo.nnz; k++) {
             coo_cell_t *cell = &block->coo.cell[k];
             if (cell->j >= block->n_node2row || block->node2row[cell->j] == 0)
                 error(
@@ -794,13 +804,12 @@ static int read_ld_block(bcf_srs_t *sr, ld_block_t *blocks, int n_pops, double a
 }
 
 static void schur_split(ld_block_t *block, csr_matrix_t schur[][2]) {
-    int n0 = 0;
-    int n1 = 0;
+    int k, n0 = 0, n1 = 0;
     const coo_matrix_t *coo = &block->coo;
     hts_expand(int, coo->nrow, block->m_schur_imap, block->schur_imap);
 
     // computes the sizes of P00 and P11 and add diagonal elements
-    for (int k = 0; k < coo->nrow; k++) {
+    for (k = 0; k < coo->nrow; k++) {
         block->schur_imap[k] = block->rows[k].n_line ? n1++ : n0++;
         if (k >= coo->m_d) break;
         int kk = block->rows[k].n_line > 0;
@@ -808,7 +817,7 @@ static void schur_split(ld_block_t *block, csr_matrix_t schur[][2]) {
     }
 
     // add non-diagonal elements to P00, P01, P10, and P11
-    for (int k = 0; k < coo->nnz; k++) {
+    for (k = 0; k < coo->nnz; k++) {
         int i = coo->cell[k].i;
         int j = coo->cell[k].j;
         int ii = block->rows[i].n_line > 0;
@@ -817,7 +826,7 @@ static void schur_split(ld_block_t *block, csr_matrix_t schur[][2]) {
     }
 
     // convert P00, P01, P10, and P11 from COO to CSR representation
-    for (int k = 0; k < 4; k++) {
+    for (k = 0; k < 4; k++) {
         block->coo_schur[k / 2][k % 2].nrow = k < 2 ? n0 : n1;
         coo_to_csr(&block->coo_schur[k / 2][k % 2], &schur[k / 2][k % 2]);
     }
@@ -836,16 +845,16 @@ typedef struct {
 } map_t;
 
 static void update_map(ld_block_t *blocks, int n_pops, map_t *map) {
-    int max_ld_nodes = 0;
-    for (int pop = 0; pop < n_pops; pop++) {
+    int pop, ld_node, max_ld_nodes = 0;
+    for (pop = 0; pop < n_pops; pop++) {
         ld_block_t *block = &blocks[pop];
         if (block->n_node2row > max_ld_nodes) max_ld_nodes = block->n_node2row;
     }
 
     map->n = 0;
-    for (int ld_node = 0; ld_node < max_ld_nodes; ld_node++) {
+    for (ld_node = 0; ld_node < max_ld_nodes; ld_node++) {
         int count = 0;
-        for (int pop = 0; pop < n_pops; pop++) {
+        for (pop = 0; pop < n_pops; pop++) {
             ld_block_t *block = &blocks[pop];
             if (ld_node < block->n_node2row && block->node2row[ld_node]
                 && block->rows[block->node2row[ld_node] - 1].n_line)
@@ -859,7 +868,7 @@ static void update_map(ld_block_t *blocks, int n_pops, map_t *map) {
             map->ld_nodes[map->n] = ld_node;
             map->n_pops[map->n] = count;
             count = 0;
-            for (int pop = 0; pop < n_pops; pop++) {
+            for (pop = 0; pop < n_pops; pop++) {
                 ld_block_t *block = &blocks[pop];
                 if (ld_node < block->n_node2row && block->node2row[ld_node]
                     && block->rows[block->node2row[ld_node] - 1].n_line) {
@@ -871,30 +880,19 @@ static void update_map(ld_block_t *blocks, int n_pops, map_t *map) {
             map->n++;
         }
     }
-    // for (int i=0; i<map->n; i++) {
-    //   fprintf(stderr, "%d", map->n_pops[i]);
-    //   for (int j=0; j<n_pops; j++) {
-    //     if (j>=map->n_pops[i]) {
-    //         fprintf(stderr, " .");
-    //     } else {
-    //         fprintf(stderr, " %d(%d)", map->ind2row[n_pops * i + j], map->ind2pop[n_pops * i + j]);
-    //     }
-    //   }
-    //   fprintf(stderr, "\n");
-    // }
-    // exit(-1);
 }
 
 static void make_sigma(int nrow, const map_t *map, int n_pops, const double *sd_arr, double beta_cov, double cross_corr,
                        coo_matrix_t *out) {
     coo_clear(out);
     out->nrow = nrow;
-    for (int ind = 0; ind < map->n; ind++) {
-        for (int pop1 = 0; pop1 < map->n_pops[ind]; pop1++) {
+    int ind, pop1, pop2;
+    for (ind = 0; ind < map->n; ind++) {
+        for (pop1 = 0; pop1 < map->n_pops[ind]; pop1++) {
             int i = map->ind2row[n_pops * ind + pop1];
             assert(sd_arr[i] > 0.0);
             append_diag(i, beta_cov * sd_arr[i] * sd_arr[i], out);
-            for (int pop2 = pop1 + 1; pop2 < map->n_pops[ind]; pop2++) {
+            for (pop2 = pop1 + 1; pop2 < map->n_pops[ind]; pop2++) {
                 int j = map->ind2row[n_pops * ind + pop2];
                 assert(sd_arr[j] > 0.0);
                 append_nnz(i, j, cross_corr * beta_cov * sd_arr[i] * sd_arr[j], out);
@@ -910,11 +908,12 @@ static void concatenate(const ld_block_t *blocks, int n_pops, coo_matrix_t *out)
 
     hts_expand0(double, out->nrow, out->m_d, out->d);
     out->nnz = 0;
-    for (int pop = 0; pop < n_pops; pop++) {
+    int pop, k;
+    for (pop = 0; pop < n_pops; pop++) {
         const ld_block_t *block = &blocks[pop];
         const coo_matrix_t *coo = &block->coo;
         memcpy(&out->d[block->row_ptr], coo->d, sizeof(double) * (coo->nrow > coo->m_d ? coo->m_d : coo->nrow));
-        for (int k = 0; k < coo->nnz; k++)
+        for (k = 0; k < coo->nnz; k++)
             append_nnz(block->row_ptr + coo->cell[k].i, block->row_ptr + coo->cell[k].j, coo->cell[k].x, out);
     }
 }
@@ -923,8 +922,9 @@ static void write_ld_block(htsFile *fh, bcf_hdr_t *hdr, line_t *lines, int n_lin
     float *es_arr = (float *)malloc(sizeof(float) * n_pops);
     float *gw_arr = (float *)malloc(sizeof(float) * n_pops);
 
-    for (int k = 0; k < n_lines; k++) {
-        for (int pop = 0; pop < n_pops; pop++) {
+    int k, pop;
+    for (k = 0; k < n_lines; k++) {
+        for (pop = 0; pop < n_pops; pop++) {
             ld_block_t *block = &blocks[pop];
             // check there is a matching row in the LDGM matrix and that the row maps to this line to avoid duplicating
             // loadings
@@ -1019,10 +1019,11 @@ static void cholmod_sparse_updown(int update, const double *sd_arr, const int *i
     int *S_rows = (int *)S->i;
     double *S_data = (double *)S->x;
 
-    for (int pop1 = 0; pop1 < n_pops; pop1++) {
+    int pop1, pop2;
+    for (pop1 = 0; pop1 < n_pops; pop1++) {
         int col = ind2row[pop1];
         assert(sd_arr[col] > 0.0);
-        for (int pop2 = pop1; pop2 < n_pops; pop2++) {
+        for (pop2 = pop1; pop2 < n_pops; pop2++) {
             int row = ind2row[pop2];
             assert(col <= row);
             assert(sd_arr[row] > 0.0);
@@ -1060,18 +1061,19 @@ static void cholmod_factor_updown(const double *sd_arr, const int *ind2row, int 
     int *C_colptr = (int *)C->p;
     int *C_rows = (int *)C->i;
     double *C_data = (double *)C->x;
+    int k, pop1, pop2;
 
     // reset the matrix
-    for (int k = 0; k <= C->ncol; k++) C_colptr[k] = 0;
+    for (k = 0; k <= C->ncol; k++) C_colptr[k] = 0;
 
     // initialize C
     double s = sqrt(s2);
     double x = s * sqrt(1 - c);
     double y = s * (sqrt(1 + c * n_pops - c) - sqrt(1 - c)) / n_pops;
-    for (int pop1 = 0; pop1 < n_pops; pop1++) {
+    for (pop1 = 0; pop1 < n_pops; pop1++) {
         int col = pop1;
         C_colptr[col + 1] = n_pops;
-        for (int pop2 = 0; pop2 < n_pops; pop2++) {
+        for (pop2 = 0; pop2 < n_pops; pop2++) {
             int row = ind2row[pop2];
             assert(sd_arr[row] > 0.0);
             *(C_rows++) = IPerm[row]; // rows need to be permuted
@@ -1080,14 +1082,14 @@ static void cholmod_factor_updown(const double *sd_arr, const int *ind2row, int 
         // rows need to be sorted
         C_rows -= n_pops;
         qsort(C_rows, n_pops, sizeof(int), cmpfunc);
-        for (int pop2 = 0; pop2 < n_pops; pop2++) {
+        for (pop2 = 0; pop2 < n_pops; pop2++) {
             int row = Perm[*(C_rows++)];
             assert(sd_arr[row] > 0.0);
             *(C_data++) = (x * (pop1 == pop2) + y) * sd_arr[row];
         }
     }
     C_colptr[0] = 0;
-    for (int k = 0; k < C->ncol; k++) C_colptr[k + 1] += C_colptr[k];
+    for (k = 0; k < C->ncol; k++) C_colptr[k + 1] += C_colptr[k];
 }
 
 // see https://github.com/DrTimothyAldenDavis/SuiteSparse/blob/dev/CHOLMOD/Modify/cholmod_updown.c
@@ -1110,7 +1112,8 @@ static void cholmod_update(int update, cholmod_factor *L, cholmod_factor *L2, ch
     assert(cm->status == CHOLMOD_OK);
     stats->solve_time += SuiteSparse_time() - tstart;
 
-    for (int i = 0; i < L->n; i++)
+    int i;
+    for (i = 0; i < L->n; i++)
         ((double *)x->x)[((int *)L->Perm)[i]] = ((double *)Px->x)[i]; // cholmod_solve(CHOLMOD_Pt)
     cholmod_sdmult(S, 0, one, zero, x, beta_pred, cm);
     assert(cm->status == CHOLMOD_OK);
@@ -1120,7 +1123,8 @@ static void cholmod_update(int update, cholmod_factor *L, cholmod_factor *L2, ch
     assert(cm->status == CHOLMOD_OK);
     stats->solve_time += SuiteSparse_time() - tstart;
 
-    for (int k = 0; k < L->n; k++) alpha_hat_resid[k] = alpha_hat[k] - ((double *)alpha_pred->x)[k];
+    int k;
+    for (k = 0; k < L->n; k++) alpha_hat_resid[k] = alpha_hat[k] - ((double *)alpha_pred->x)[k];
 }
 
 // in this function we want to compute the log of:
@@ -1169,7 +1173,8 @@ static double log_bfx(const double *sd_arr, const double *resid, const double *n
     double det = 1.0;   // |I + n S|
     double d_sum = 0.0; // e (inv(D A D) - I) e'
     double p_sum = 0.0; // sqrt(e (inv(D A) P inv(D A)) e')
-    for (int pop = 0; pop < n_pops; pop++) {
+    int pop;
+    for (pop = 0; pop < n_pops; pop++) {
         double sd = sd_arr[ind[pop]];
         assert(sd > 0);
         double e = resid[ind[pop]];
@@ -1226,15 +1231,16 @@ static double gibbs(int nrow, const map_t *map, const double *sd_arr, const doub
     // also initialize bf_tbl for the Bayes factors computations and allow expansion of these arrays in case
     // the expected number of effects increases while the Gibbs sampler runs
 
+    int i, j, k, ind;
     double new_no_effects = 0.0;
-    for (int i = 0; i < grid_size; i++) new_no_effects += prior_grid[i];
+    for (i = 0; i < grid_size; i++) new_no_effects += prior_grid[i];
     new_no_effects *= (double)map->n;
     int no_effects = ceil(new_no_effects + 2.0 * (double)sqrt(new_no_effects)); // this is simpler than poissinv()
     int *counts = (int *)malloc(sizeof(int) * grid_size);
     double *alpha_hat_resid = (double *)malloc(sizeof(double) * nrow); // alpha_hat residual values
     int m_gamma_ind = no_effects;
     int *gamma_ind = (int *)malloc(sizeof(int) * m_gamma_ind);
-    for (int j = 0; j < no_effects; j++) gamma_ind[j] = -1;
+    for (j = 0; j < no_effects; j++) gamma_ind[j] = -1;
     int m_sigmasq_ind = no_effects;
     int *sigmasq_ind = (int *)malloc(sizeof(int) * m_sigmasq_ind);
     int m_bf_tbl = map->n * grid_size;
@@ -1259,7 +1265,7 @@ static double gibbs(int nrow, const map_t *map, const double *sd_arr, const doub
     cholmod_dense *Ework = NULL; // workspace for cholmod_solve2
 
     if (debug) {
-        for (int i = 0; i < nrow; i++) {
+        for (i = 0; i < nrow; i++) {
             ((double *)a->x)[i] = alpha_hat[i];
             ((double *)b->x)[i] = beta_hat[i];
             ((double *)x->x)[i] = sd_arr[i];
@@ -1309,7 +1315,7 @@ static double gibbs(int nrow, const map_t *map, const double *sd_arr, const doub
     }
 
     // initiale vectors
-    for (int i = 0; i < nrow; i++) {
+    for (i = 0; i < nrow; i++) {
         IPerm[((int *)L->Perm)[i]] = i;
         ((double *)Pb->x)[i] = beta_hat[((int *)L->Perm)[i]]; // cholmod_solve(CHOLMOD_P)
     }
@@ -1327,7 +1333,7 @@ static double gibbs(int nrow, const map_t *map, const double *sd_arr, const doub
     assert(cm->status == CHOLMOD_OK);
     stats->solve_time += SuiteSparse_time() - tstart;
 
-    for (int i = 0; i < nrow; i++) {
+    for (i = 0; i < nrow; i++) {
         ((double *)Pb->x)[i] = 0.0;
         ((double *)x->x)[((int *)L->Perm)[i]] = ((double *)Px->x)[i]; // cholmod_solve(CHOLMOD_Pt)
     }
@@ -1392,23 +1398,23 @@ static double gibbs(int nrow, const map_t *map, const double *sd_arr, const doub
         fclose(f);
     }
 
-    for (int k = 0; k < nrow; k++) {
+    for (k = 0; k < nrow; k++) {
         alpha_hat_resid[k] = alpha_hat[k] - ((double *)a->x)[k];
         beta_pred[k] = 0.0;
     }
     // if not enough iterations will be run, use the beta blup values as output
     if (n_iter <= n_burn_in)
-        for (int k = 0; k < nrow; k++) beta_pred[k] = ((double *)b->x)[k];
+        for (k = 0; k < nrow; k++) beta_pred[k] = ((double *)b->x)[k];
 
     // Gibbs sampler
     double zero_posterior = 0.0;
     double rescaled_bf_sum = 0.0;
     int update_bf = 1;
     double all_selected_effects = 0.0;
-    for (int i = 0; i < n_iter; i++) {
+    for (i = 0; i < n_iter; i++) {
         double zero_prior = 1.0;
-        for (int k = 0; k < grid_size; k++) zero_prior -= prior_grid[k] * map->n / no_effects;
-        for (int j = 0; j < no_effects; j++) {
+        for (k = 0; k < grid_size; k++) zero_prior -= prior_grid[k] * map->n / no_effects;
+        for (j = 0; j < no_effects; j++) {
 
             // downdate if effect already assigned in one of the previous iterations
             if (gamma_ind[j] >= 0) {
@@ -1428,10 +1434,10 @@ static double gibbs(int nrow, const map_t *map, const double *sd_arr, const doub
             if (update_bf) {
                 tstart = SuiteSparse_time();
                 double bf_max = -DBL_MAX;
-                for (int k = 0; k < grid_size; k++) {
+                for (k = 0; k < grid_size; k++) {
                     double log_prior_grid = log(prior_grid[k]);
                     double sigmasq = sigmasq_grid[k];
-                    for (int ind = 0; ind < map->n; ind++) {
+                    for (ind = 0; ind < map->n; ind++) {
                         int n = map->n_pops[ind];
                         int *ind2row = &map->ind2row[ind * n_pops];
                         double bf_tmp =
@@ -1446,9 +1452,9 @@ static double gibbs(int nrow, const map_t *map, const double *sd_arr, const doub
 
                 //                                                 double min_bf = DBL_MAX;
                 //                                                 double max_bf = -DBL_MAX;
-                //                                                 for (int ind = 0; ind < map->n; ind++) {
+                //                                                 for (ind = 0; ind < map->n; ind++) {
                 //                                                     fprintf(stderr, "%d", ind);
-                //                                                     for (int k = 0; k < grid_size; k++) {
+                //                                                     for (k = 0; k < grid_size; k++) {
                 //                                                         double bf_value = bf_tbl[k * map->n + ind] -
                 //                                                         log(prior_grid[k]); fprintf(stderr, "   %6g",
                 //                                                         exp(bf_value)); if (max_bf < bf_value) max_bf
@@ -1462,7 +1468,7 @@ static double gibbs(int nrow, const map_t *map, const double *sd_arr, const doub
 
                 // rescale the BF's to avoid the possibility of overflow
                 rescaled_bf_sum = 0.0;
-                for (int k = 0; k < grid_size * map->n; k++) {
+                for (k = 0; k < grid_size * map->n; k++) {
                     bf_tbl[k] = exp(bf_tbl[k] - bf_max);
                     rescaled_bf_sum += bf_tbl[k];
                 }
@@ -1512,12 +1518,12 @@ static double gibbs(int nrow, const map_t *map, const double *sd_arr, const doub
 
         // update the new beta_hat's
         if (i >= n_burn_in) {
-            for (int k = 0; k < nrow; k++) beta_pred[k] += ((double *)b->x)[k] / (double)(n_iter - n_burn_in);
-            for (int j = 0; j < no_effects; j++) {
+            for (k = 0; k < nrow; k++) beta_pred[k] += ((double *)b->x)[k] / (double)(n_iter - n_burn_in);
+            for (j = 0; j < no_effects; j++) {
                 if (gamma_ind[j] >= 0) {
                     int ind = gamma_ind[j];
                     double sigmasq = sigmasq_grid[sigmasq_ind[j]];
-                    for (int k = 0; k < map->n_pops[ind]; k++) {
+                    for (k = 0; k < map->n_pops[ind]; k++) {
                         int row = map->ind2row[ind * n_pops + k];
                         gibbs_weight[row] += 1.0 / (double)(n_iter - n_burn_in);
                         int pop = map->ind2pop[ind * n_pops + k];
@@ -1530,13 +1536,13 @@ static double gibbs(int nrow, const map_t *map, const double *sd_arr, const doub
         }
 
         // count number of effects in each category
-        for (int j = 0; j < grid_size; j++) counts[j] = 0;
-        for (int j = 0; j < no_effects; j++)
+        for (j = 0; j < grid_size; j++) counts[j] = 0;
+        for (j = 0; j < no_effects; j++)
             if (gamma_ind[j] >= 0) counts[sigmasq_ind[j]]++;
 
         // compute new prior_counts
         int new_no_effects = 0;
-        for (int j = 0; j < grid_size; j++) new_no_effects += counts[j];
+        for (j = 0; j < grid_size; j++) new_no_effects += counts[j];
         if (verbose && new_no_effects > 0)
             fprintf(log_file, "Gibbs_iteration=%d selected_effects=%d\n", i + 1, new_no_effects);
         if (i >= n_burn_in) all_selected_effects += (double)new_no_effects / (double)(n_iter - n_burn_in);
@@ -1544,7 +1550,7 @@ static double gibbs(int nrow, const map_t *map, const double *sd_arr, const doub
         new_no_effects += ceil(2.0 * (double)sqrt(new_no_effects)); // this is simpler than poissinv()
         if (new_no_effects > no_effects) {
             hts_expand(int, new_no_effects, m_gamma_ind, gamma_ind);
-            for (int j = no_effects; j < new_no_effects; j++) gamma_ind[j] = -1;
+            for (j = no_effects; j < new_no_effects; j++) gamma_ind[j] = -1;
             hts_expand(int, new_no_effects, m_sigmasq_ind, sigmasq_ind);
             hts_expand(double, new_no_effects *grid_size, m_bf_tbl, bf_tbl);
             no_effects = new_no_effects;
@@ -1552,7 +1558,7 @@ static double gibbs(int nrow, const map_t *map, const double *sd_arr, const doub
     }
 
     if (debug) {
-        for (int i = 0; i < nrow; i++) ((double *)b->x)[i] = beta_pred[i];
+        for (i = 0; i < nrow; i++) ((double *)b->x)[i] = beta_pred[i];
         f = fopen("beta_pgs.txt", "w");
         cholmod_write_dense(f, b, NULL, cm);
         fclose(f);
@@ -1598,7 +1604,7 @@ static const char *usage(void) {
            "About: Compute loadings with GraphPred model from GWAS-VCF summary statistics.\n"
            "[ Nowbandegani, P. S., Wohns, A. W., et al. Extremely sparse models of linkage disequilibrium in "
            "ancestrally\n"
-           "diverse association studies. bioRxiv, (2022) https://doi.org/10.1101/2022.09.06.506858 ]\n"
+           "diverse association studies. bioRxiv, (2023) http://doi.org/10.1038/s41588-023-01487-8 ]\n"
            "\n"
            "Usage: bcftools +pgs [options] <score.gwas.vcf.gz> [<ldgm.vcf.gz> <ldgm2.vcf.gz> ...]\n"
            "Plugin options:\n"
@@ -1679,6 +1685,7 @@ static FILE *get_file_handle(const char *str) {
 }
 
 int run(int argc, char **argv) {
+    int i, pop, k, l;
     double average_ld_score = AVERAGE_LD_SCORE_DFLT;
     double expected_ratio = EXPECTED_RATIO_DFLT;
     double max_effect = NAN;
@@ -2029,14 +2036,14 @@ int run(int argc, char **argv) {
         error("Error opening GWAS-VCF file %s: %s\n", argv[optind], bcf_sr_strerror(sr->errnum));
     check_gwas(bcf_sr_get_header(sr, 0));
 
-    for (int i = 0; i < n_files; i++) {
+    for (i = 0; i < n_files; i++) {
         if (!bcf_sr_add_reader(sr, filenames[i]))
             error("Error opening LDGM-VCF file %s: %s\n", filenames[i], bcf_sr_strerror(sr->errnum));
         check_ldgm(bcf_sr_get_header(sr, 1 + i));
     }
 
     if (filenames != argv + optind + 1) {
-        for (int pop = 0; pop < n_files; pop++) free(filenames[pop]);
+        for (pop = 0; pop < n_files; pop++) free(filenames[pop]);
         free(filenames);
     }
 
@@ -2079,7 +2086,7 @@ int run(int argc, char **argv) {
         if (sigmasq_values_str) {
             char **list = hts_readlist(sigmasq_values_str, 0, &grid_size);
             sigmasq_values = (double *)malloc(sizeof(double) * grid_size);
-            for (int i = 0; i < grid_size; i++) {
+            for (i = 0; i < grid_size; i++) {
                 sigmasq_values[i] = strtod(list[i], &tmp);
                 if (*tmp) error("Could not parse: --sigmasq-values %s\n", list[i]);
                 free(list[i]);
@@ -2089,10 +2096,10 @@ int run(int argc, char **argv) {
             grid_size = 2;
             sigmasq_values = (double *)malloc(sizeof(double) * grid_size);
             sigmasq_values[0] = max_effect / 2.0;
-            for (int i = 1; i < grid_size; i++) sigmasq_values[i] = sigmasq_values[i - 1] / 2.0;
+            for (i = 1; i < grid_size; i++) sigmasq_values[i] = sigmasq_values[i - 1] / 2.0;
         }
         fprintf(log_file, "sigmasqGridValues:");
-        for (int i = 0; i < grid_size; i++) fprintf(log_file, " %.4g", sigmasq_values[i]);
+        for (i = 0; i < grid_size; i++) fprintf(log_file, " %.4g", sigmasq_values[i]);
         fprintf(log_file, "\n");
 
         // read sigmasq grid weights
@@ -2103,7 +2110,7 @@ int run(int argc, char **argv) {
             if (grid_size != grid_size_2)
                 error("Length %d of sigmasqGridValues and length %dsigmasqGridWeights do not match\n", grid_size,
                       grid_size_2);
-            for (int i = 0; i < grid_size; i++) {
+            for (i = 0; i < grid_size; i++) {
                 sigmasq_weights[i] = strtod(list2[i], &tmp);
                 if (*tmp) error("Could not parse: --sigmasq-weights %s\n", list2[i]);
                 free(list2[i]);
@@ -2111,11 +2118,11 @@ int run(int argc, char **argv) {
             free(list2);
         } else {
             // TODO this is going to have to change to something more reasonable
-            for (int i = 0; i < grid_size; i++)
+            for (i = 0; i < grid_size; i++)
                 sigmasq_weights[i] = heritability_per_marker / sigmasq_values[i] / grid_size;
         }
         fprintf(log_file, "sigmasqGridWeights:");
-        for (int i = 0; i < grid_size; i++) fprintf(log_file, " %.4g", sigmasq_weights[i]);
+        for (i = 0; i < grid_size; i++) fprintf(log_file, " %.4g", sigmasq_weights[i]);
         fprintf(log_file, "\n");
     }
 
@@ -2145,14 +2152,14 @@ int run(int argc, char **argv) {
     } else {
         samples = hdr->samples;
     }
-    for (int pop = 0; pop < n_files; pop++) {
+    for (pop = 0; pop < n_files; pop++) {
         imap[pop] = bcf_hdr_id2int(hdr, BCF_DT_SAMPLE, samples[pop]);
         if (imap[pop] < 0)
             error("Summary statistic %s not found in the GWAS-VCF file %s\n", samples[pop],
                   (bcf_sr_get_reader(sr, 0))->fname);
     }
     if (sample_list) {
-        for (int i = 0; i < n_files; i++) free(samples[i]);
+        for (i = 0; i < n_files; i++) free(samples[i]);
         free(samples);
     }
 
@@ -2161,7 +2168,7 @@ int run(int argc, char **argv) {
         out_hdr = bcf_hdr_subset(hdr, 0, 0, 0);
         bcf_hdr_remove(out_hdr, BCF_HL_FMT, NULL);
         kstring_t str = {0, 0, NULL};
-        for (int i = 0; i < n_files; i++) {
+        for (i = 0; i < n_files; i++) {
             str.l = 0;
             ksprintf(&str, n_files > 1 ? "%s_pgsx_a%g_b%.2g" : "%s_pgs_a%g_b%.2g", hdr->samples[imap[i]],
                      0.0 - alpha_param, beta_cov);
@@ -2231,7 +2238,7 @@ int run(int argc, char **argv) {
 
     // allocate structures needed across ancestries
     ld_block_t *blocks = (ld_block_t *)calloc(sizeof(ld_block_t), n_files);
-    for (int pop = 0; pop < n_files; pop++) {
+    for (pop = 0; pop < n_files; pop++) {
         blocks[pop].imap = imap[pop];
         blocks[pop].ld_block = -1;
     }
@@ -2241,7 +2248,7 @@ int run(int argc, char **argv) {
     int m_lines = 0;
 
     if (sample_sizes) {
-        for (int pop = 0; pop < n_files; pop++) {
+        for (pop = 0; pop < n_files; pop++) {
             blocks[pop].neff = strtod(sample_sizes[pop], &tmp);
             if (*tmp) error("Could not parse element: %s\n", sample_sizes[pop]);
             free(sample_sizes[pop]);
@@ -2271,7 +2278,7 @@ int run(int argc, char **argv) {
         ret = read_ld_block(sr, blocks, n_files, alpha_param, &lines, &n_lines, &m_lines, filter, filter_logic);
         if (stats_only || !verbose) fprintf(log_file, "\33[2K\r%s ld_block=%d", blocks[0].seqname, blocks[0].ld_block);
         if (ld_block >= 0 && ld_block != blocks[0].ld_block) {
-            for (int k = 0; k < n_lines; k++) bcf_destroy(lines[k].line);
+            for (k = 0; k < n_lines; k++) bcf_destroy(lines[k].line);
             n_blocks++;
             continue;
         }
@@ -2290,7 +2297,7 @@ int run(int argc, char **argv) {
         hts_expand(double, (n_blocks + 1) * n_files, m_medians_alpha_hat2, medians_alpha_hat2);
         hts_expand(double, (n_blocks + 1) * n_files, m_means_neff, means_neff);
 
-        for (int pop = 0; pop < n_files; pop++) {
+        for (pop = 0; pop < n_files; pop++) {
             ld_block_t *block = &blocks[pop];
 
             // create Schur complement
@@ -2298,7 +2305,7 @@ int run(int argc, char **argv) {
 
             // import data vector from LD block structure
             int l = 0;
-            for (int k = 0; k < block->coo.nrow; k++) {
+            for (k = 0; k < block->coo.nrow; k++) {
                 row_t *row = &block->rows[k];
                 if (row->n_line == 0) {
                     sd_arr[block->row_ptr + k] = 0.0;
@@ -2320,21 +2327,21 @@ int run(int argc, char **argv) {
             medians_alpha_hat2[n_blocks * n_files + pop] = get_median2(&alpha_hat_1[block->row_ptr], l, 1);
             means_neff[n_blocks * n_files + pop] = block->mean_neff;
             if (stats_only) {
-                for (int k = 0; k < 4; k++) csr_destroy(&schur_P[k / 2][k % 2]);
+                for (k = 0; k < 4; k++) csr_destroy(&schur_P[k / 2][k % 2]);
                 continue;
             }
 
             // run precisionMultiply()
             block->n_iter =
                 precision_multiply(schur_P, &alpha_hat_1[block->row_ptr], tol, jacobi, &beta_hat_1[block->row_ptr]);
-            for (int k = 0; k < 4; k++) csr_destroy(&schur_P[k / 2][k % 2]);
+            for (k = 0; k < 4; k++) csr_destroy(&schur_P[k / 2][k % 2]);
             // print LD block logs
             if (verbose)
                 fprintf(log_file, "%s neff=%.0f nnz=%d rows=%d missing=%d cg_multiply=%d\n", hdr->samples[block->imap],
                         block->mean_neff, block->coo.nnz, block->coo.nrow, block->n_missing, block->n_iter);
         }
         if (stats_only) {
-            for (int k = 0; k < n_lines; k++) bcf_destroy(lines[k].line);
+            for (k = 0; k < n_lines; k++) bcf_destroy(lines[k].line);
             n_blocks++;
             continue;
         }
@@ -2342,16 +2349,16 @@ int run(int argc, char **argv) {
         // create concatenated precision matrix
         concatenate(blocks, n_files, &coo_P);
 
-        for (int pop = 0; pop < n_files; pop++) {
+        for (pop = 0; pop < n_files; pop++) {
             // divide precision matrix by n
             ld_block_t *block = &blocks[pop];
             matdiv(&block->coo, block->mean_neff);
         }
 
         // concatenate data vector
-        for (int pop = 0; pop < n_files; pop++) {
+        for (pop = 0; pop < n_files; pop++) {
             ld_block_t *block = &blocks[pop];
-            for (int k = 0, l = 0; k < block->coo.nrow; k++) {
+            for (k = 0, l = 0; k < block->coo.nrow; k++) {
                 row_t *row = &block->rows[k];
                 if (row->n_line == 0)
                     beta_hat[block->row_ptr + k] = 0.0;
@@ -2378,9 +2385,9 @@ int run(int argc, char **argv) {
                   &cm, &stats, log_file, verbose > 1, ld_block == blocks[0].ld_block);
 
         // export data vector into LD block structure
-        for (int pop = 0; pop < n_files; pop++) {
+        for (pop = 0; pop < n_files; pop++) {
             ld_block_t *block = &blocks[pop];
-            for (int k = 0; k < block->coo.nrow; k++) {
+            for (k = 0; k < block->coo.nrow; k++) {
                 row_t *row = &block->rows[k];
                 if (row->n_line == 0) continue;
                 row->ez_deriv = beta_pred[block->row_ptr + k] / row->sqrt_het;
@@ -2402,7 +2409,7 @@ int run(int argc, char **argv) {
 
     fprintf(log_file, "\33[2K\r=== SUMMARY ===\n");
 
-    for (int pop = 0; pop < n_files; pop++) {
+    for (pop = 0; pop < n_files; pop++) {
         ld_block_t *block = &blocks[pop];
         double median_alpha_hat2 = get_median(&medians_alpha_hat2[pop], n_blocks, n_files);
         double mean_alpha_hat2 = block->all_sum_alpha_hat2 / (double)block->all_n_non_missing;
@@ -2456,7 +2463,7 @@ int run(int argc, char **argv) {
     free(beta_hat);
     free(beta_pred);
     free(gibbs_weight);
-    for (int pop = 0; pop < n_files; pop++) ld_block_destroy(&blocks[pop]);
+    for (pop = 0; pop < n_files; pop++) ld_block_destroy(&blocks[pop]);
     free(blocks);
     free(lines);
     free(sigmasq_values);

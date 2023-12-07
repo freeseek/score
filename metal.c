@@ -33,7 +33,7 @@
 #include "bcftools.h"
 #include "filter.h"
 
-#define METAL_VERSION "2023-10-18"
+#define METAL_VERSION "2023-12-06"
 
 // Logic of the filters: include or exclude sites which match the filters?
 #define FLT_INCLUDE 1
@@ -331,12 +331,12 @@ static const char *usage_text(void) {
 
 static inline int filter_test_with_logic(filter_t *filter, bcf1_t *line, uint8_t **smpl_pass, int filter_logic) {
     if (!filter) return 1;
-    int pass = filter_test(filter, line, (const uint8_t **)smpl_pass);
+    int i, pass = filter_test(filter, line, (const uint8_t **)smpl_pass);
     if (filter_logic & FLT_EXCLUDE) {
         if (pass) {
             pass = 0;
             if (!(*smpl_pass)) return pass;
-            for (int i = 0; i < line->n_sample; i++)
+            for (i = 0; i < line->n_sample; i++)
                 if ((*smpl_pass)[i])
                     (*smpl_pass)[i] = 0;
                 else {
@@ -346,13 +346,14 @@ static inline int filter_test_with_logic(filter_t *filter, bcf1_t *line, uint8_t
         } else {
             pass = 1;
             if ((*smpl_pass))
-                for (int i = 0; i < line->n_sample; i++) (*smpl_pass)[i] = 1;
+                for (i = 0; i < line->n_sample; i++) (*smpl_pass)[i] = 1;
         }
     }
     return pass;
 }
 
 int run(int argc, char **argv) {
+    int i, j, k, l, rid, idx;
     int filter_logic = 0;
     int szw = 0;
     int het = 0;
@@ -527,7 +528,7 @@ int run(int argc, char **argv) {
     }
     if (n_files < 2) error("At least 2 summary statistics files required as input while only %d provided\n", n_files);
 
-    for (int j = 0; j < n_files; j++)
+    for (j = 0; j < n_files; j++)
         if (!bcf_sr_add_reader(sr, filenames[j]))
             error("Error opening %s: %s\n", filenames[j], bcf_sr_strerror(sr->errnum));
 
@@ -537,7 +538,7 @@ int run(int argc, char **argv) {
         passes = (int *)malloc(sizeof(int) * n_files);
         smpl_passes = (uint8_t **)malloc(sizeof(uint8_t *) * n_files);
         filters = (filter_t **)malloc(sizeof(filter_t *) * n_files);
-        for (int j = 0; j < n_files; j++) {
+        for (j = 0; j < n_files; j++) {
             hdr = bcf_sr_get_header(sr, j);
             filters[j] = filter_init(hdr, filter_str);
         }
@@ -547,21 +548,35 @@ int run(int argc, char **argv) {
     bcf_hdr_t *out_hdr = bcf_hdr_init("w");
     int *id = (int *)malloc(sizeof(int) * SIZE * n_files);
     int output[SIZE] = {0};
-    for (int j = 0; j < n_files; j++) {
+    for (j = 0; j < n_files; j++) {
         hdr = bcf_sr_get_header(sr, j);
+        // copy filters information in new header
+        for (i = 0; i < hdr->nhrec; i++) {
+            bcf_hrec_t *hrec = hdr->hrec[i];
+            if (hrec->type == BCF_HL_FLT) {
+                // copied from htslib/vcf.c
+                int k = bcf_hrec_find_key(hrec, "ID");
+                assert(k >= 0); // this should always be true for valid VCFs
+                bcf_hrec_t *rec = bcf_hdr_get_hrec(out_hdr, hrec->type, "ID", hrec->vals[k], NULL);
+                if (!rec) {
+                    int res = bcf_hdr_add_hrec(out_hdr, bcf_hrec_dup(hrec));
+                    assert(res == 1);
+                }
+            }
+        }
         // copy contigs information in new header
-        for (int rid = 0; rid < hdr->n[BCF_DT_CTG]; rid++) {
+        for (rid = 0; rid < hdr->n[BCF_DT_CTG]; rid++) {
             const char *seq = hdr->id[BCF_DT_CTG][rid].key;
             if (bcf_hdr_name2id(out_hdr, seq) != -1) continue;
             uint64_t len = hdr->id[BCF_DT_CTG][rid].val->info[0];
             bcf_hdr_printf(out_hdr, len ? "##contig=<ID=%s,length=%" PRIu64 ">" : "##contig=<ID=%s>", seq, len);
         }
         // copy samples information in new header
-        for (int l = 0; l < bcf_hdr_nsamples(hdr); l++)
+        for (l = 0; l < bcf_hdr_nsamples(hdr); l++)
             if (bcf_hdr_id2int(out_hdr, BCF_DT_SAMPLE, hdr->samples[l]) < 0)
                 bcf_hdr_add_sample(out_hdr, hdr->samples[l]);
 
-        for (int idx = 0; idx < SIZE; idx++) {
+        for (idx = 0; idx < SIZE; idx++) {
             id[j * SIZE + idx] = bcf_hdr_id2int(hdr, BCF_DT_ID, id_str[idx]);
             if (!bcf_hdr_idinfo_exists(hdr, BCF_HL_FMT, id[j * SIZE + idx])) id[j * SIZE + idx] = -1;
         }
@@ -592,8 +607,8 @@ int run(int argc, char **argv) {
     int *i2n = (int *)calloc(sizeof(int), n_smpl);
     int **i_k2j = (int **)malloc(sizeof(int *) * n_smpl);
     int **i_k2l = (int **)malloc(sizeof(int *) * n_smpl);
-    for (int i = 0; i < n_smpl; i++) {
-        for (int j = 0; j < n_files; j++) {
+    for (i = 0; i < n_smpl; i++) {
+        for (j = 0; j < n_files; j++) {
             hdr = bcf_sr_get_header(sr, j);
             if (bcf_hdr_id2int(hdr, BCF_DT_SAMPLE, out_hdr->samples[i]) != -1) i2n[i]++;
         }
@@ -603,7 +618,7 @@ int run(int argc, char **argv) {
         int output_nc = 1;
         int output_af = 1;
         int output_ac = 1;
-        for (int j = 0, k = 0; j < n_files; j++) {
+        for (j = 0, k = 0; j < n_files; j++) {
             hdr = bcf_sr_get_header(sr, j);
             int l = bcf_hdr_id2int(hdr, BCF_DT_SAMPLE, out_hdr->samples[i]);
             if (l < 0) continue;
@@ -637,7 +652,7 @@ int run(int argc, char **argv) {
         output[CQ] = 1;
         output[I2] = 1;
     }
-    for (int idx = 0; idx < SIZE; idx++)
+    for (idx = 0; idx < SIZE; idx++)
         if (output[idx]
             && bcf_hdr_printf(out_hdr, "##FORMAT=<ID=%s,Number=A,Type=Float,Description=\"%s\">", id_str[idx],
                               desc_str[idx])
@@ -661,13 +676,13 @@ int run(int argc, char **argv) {
     // process GWAS-VCF rows
     float *val_arr = (float *)malloc(sizeof(float) * SIZE * n_smpl);
     char *esd_arr = (char *)malloc(sizeof(float) * n_files * n_smpl);
-    for (int i = 0; i < n_files * n_smpl; i++) esd_arr[i] = bcf_str_vector_end;
+    for (i = 0; i < n_files * n_smpl; i++) esd_arr[i] = bcf_str_vector_end;
     bcf1_t *out_line = bcf_init();
     bcf_float_set_missing(out_line->qual);
     while (bcf_sr_next_line(sr)) {
         if (filters) {
             int pass = 0;
-            for (int j = 0; j < n_files; j++) {
+            for (j = 0; j < n_files; j++) {
                 if (!bcf_sr_has_line(sr, j)) continue;
                 bcf1_t *line = bcf_sr_get_line(sr, j);
                 hdr = bcf_sr_get_header(sr, j);
@@ -677,9 +692,9 @@ int run(int argc, char **argv) {
             if (!pass) continue; // skip the line for all input VCFs
         }
 
-        for (int i = 0; i < SIZE * n_smpl; i++) bcf_float_set_missing(val_arr[i]);
+        for (i = 0; i < SIZE * n_smpl; i++) bcf_float_set_missing(val_arr[i]);
 
-        for (int i = 0; i < n_smpl; i++) {
+        for (i = 0; i < n_smpl; i++) {
             double xnum = 0.0;
             double xden = 0.0;
             double ns_sum = 0.0;
@@ -691,7 +706,8 @@ int run(int argc, char **argv) {
             int fill_line = 0;
             int df = -1;
             bcf_update_id(NULL, out_line, NULL);
-            for (int k = 0; k < i2n[i]; k++) {
+            bcf_update_filter(out_hdr, out_line, NULL, 0);
+            for (k = 0; k < i2n[i]; k++) {
                 esd_arr[n_files * i + k] = '?';
                 int j = i_k2j[i][k];
                 if (!bcf_sr_has_line(sr, j)) continue;
@@ -709,7 +725,7 @@ int run(int argc, char **argv) {
                     continue; // skip the line for one input VCF
 
                 double val[SIZE]; // set all values to NAN
-                for (int idx = 0; idx < SIZE; idx++) {
+                for (idx = 0; idx < SIZE; idx++) {
                     bcf_fmt_t *fmt = bcf_get_fmt_id(line, id[j * SIZE + idx]);
                     if (fmt && !bcf_float_is_missing(((float *)fmt->p)[l])
                         && !bcf_float_is_vector_end(((float *)fmt->p)[l]))
@@ -720,7 +736,8 @@ int run(int argc, char **argv) {
 
                 if (esd) {
                     int effect = szw ? EZ : ES;
-                    if (!isnan(val[effect])) esd_arr[n_files * i + k] = val[effect] == 0.0 ? '0' : (val[effect] > 0.0 ? '+' : '-');
+                    if (!isnan(val[effect]))
+                        esd_arr[n_files * i + k] = val[effect] == 0.0 ? '0' : (val[effect] > 0.0 ? '+' : '-');
                 }
 
                 if (isnan(val[NE]) && !isnan(val[NS])) {
@@ -754,6 +771,12 @@ int run(int argc, char **argv) {
                 ne_sum += val[NE];
 
                 if (line->d.id[0] != '.' || line->d.id[1]) bcf_add_id(NULL, out_line, line->d.id);
+                bcf_unpack(line, BCF_UN_FLT);
+                for (l = 0; l < line->d.n_flt; l++) {
+                    const char *flt = hdr->id[BCF_DT_ID][line->d.flt[l]].key;
+                    int flt_id = bcf_hdr_id2int(out_hdr, BCF_DT_ID, flt);
+                    bcf_add_filter(out_hdr, out_line, flt_id);
+                }
                 df++;
             }
 
@@ -778,11 +801,11 @@ int run(int argc, char **argv) {
                 val_arr[n_smpl * CQ + i] = (float)(-log_chidist(cq_sum, (double)df) / M_LN10);
             }
 
-            for (int idx = 0; idx < SIZE; idx++)
+            for (idx = 0; idx < SIZE; idx++)
                 if (isnan(val_arr[n_smpl * idx + i])) bcf_float_set_missing(val_arr[n_smpl * idx + i]);
         }
 
-        for (int idx = 0; idx < SIZE; idx++)
+        for (idx = 0; idx < SIZE; idx++)
             if (output[idx]) bcf_update_format_float(out_hdr, out_line, id_str[idx], &val_arr[n_smpl * idx], n_smpl);
         if (esd) bcf_update_format_char(out_hdr, out_line, id_str[SIZE], esd_arr, n_files * n_smpl);
         if (bcf_write(out_fh, out_hdr, out_line) < 0) error("Unable to write to output VCF file\n");
@@ -791,7 +814,7 @@ int run(int argc, char **argv) {
     free(val_arr);
     free(esd_arr);
     free(id);
-    for (int i = 0; i < n_smpl; i++) {
+    for (i = 0; i < n_smpl; i++) {
         free(i_k2j[i]);
         free(i_k2l[i]);
     }
@@ -801,11 +824,11 @@ int run(int argc, char **argv) {
     free(passes);
     free(smpl_passes);
     if (filters) {
-        for (int j = 0; j < n_files; j++) filter_destroy(filters[j]);
+        for (j = 0; j < n_files; j++) filter_destroy(filters[j]);
         free(filters);
     }
     if (pathname) {
-        for (int j = 0; j < n_files; j++) free(filenames[j]);
+        for (j = 0; j < n_files; j++) free(filenames[j]);
         free(filenames);
     }
     if (hts_close(out_fh) < 0) error("Close failed: %s\n", out_fh->fn);

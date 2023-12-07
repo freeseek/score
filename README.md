@@ -145,7 +145,7 @@ Options for how to update INFO/FORMAT records:
 Examples:
       bcftools +liftover -Ob -o output.hg38.bcf input.hg19.bcf -- \
         -s human_g1k_v37.fasta -f Homo_sapiens_assembly38.fasta -c hg19ToHg38.over.chain.gz
-      bcftools +liftover -Oz -o chm13v2.0_dbSNPv155.vcf.gz GRCh38_dbSNPv155.vcf.gz -- \
+      bcftools +liftover -Oz -o chm13v2.0_dbSNPv156.vcf.gz GRCh38_dbSNPv156.vcf.gz -- \
         -s Homo_sapiens_assembly38.fasta -f chm13v2.0.fa -c hg38ToHs1.over.chain.gz
 
 To obtain liftover chain files:
@@ -439,9 +439,7 @@ wget https://raw.githubusercontent.com/neurogenomics/MungeSumstats/master/data/s
 echo -e "CHR_NAME\tCHR"
 echo -e "BP_GRCH38\tBP"
 echo -e "CHR_POSITION\tBP"
-echo -e "GENPOS\tBP"
 echo -e "NAME\tSNP"
-echo -e "VARIANT_ID\tSNP"
 echo -e "AL1\tA1"
 echo -e "AL2\tA2"
 echo -e "IMPINFO\tINFO"
@@ -868,11 +866,11 @@ done
 Compute polygenic score loadings
 ================================
 
-The BCFtools pgs plugin is inspired by the [Graphpred](xxx) algorithm, written and designed by Pouria Salehi Nowbandegani, Anthony Wilder Wohns, Giulio Genovese, and Luke O’Connor. The method consists of two strategies: first it applies the [best linear unbiased prediction](https://en.wikipedia.org/wiki/Best_linear_unbiased_prediction) (BLUP) model to compute improved polygenic weights starting from summary statistics; then, to avoid the shortcomings of the infinitesimal model that does not correctly model the strong effects of sparse causal markers, it applies a generalization of the [SuSiE](https://doi.org/10.1111/rssb.12388) model using a Gibbs sampler instead of a variational approximation to iteratively refine the prior at SNPs with high residual association statistics. It models LD using sparse matrices derived from LD graphical models ([LDGMs](http://dx.doi.org/10.1038/s41588-023-01487-8)), allowing the linear algebra computations to run 10-100x faster than other methods. Compared to older methods such as PRS-CS that solely rely on ~1.3M HapMap3 common (minor allele frequency > 1%) SNPs, it achieves a 5-10% boost by relying instead on ~14M common (minor allele frequency > 1%) SNPs from the 1000 Genomes project high coverage reference panel. It can further model summary statistics from multiple ancestries at the same time
+The BCFtools pgs plugin is inspired by the [Graphpred](xxx) algorithm, written and designed by Pouria Salehi Nowbandegani, Anthony Wilder Wohns, Giulio Genovese, and Luke O’Connor. The method consists of two strategies: first it applies the [best linear unbiased prediction](https://en.wikipedia.org/wiki/Best_linear_unbiased_prediction) (BLUP) model to compute improved polygenic weights starting from summary statistics; then, to avoid the shortcomings of the infinitesimal model that does not correctly model the strong effects of sparse causal markers, it applies a generalization of the [SuSiE](https://doi.org/10.1111/rssb.12388) model using a Gibbs sampler instead of a variational approximation to iteratively refine the prior at SNPs with high residual association statistics. It models LD using sparse matrices derived from LD graphical models ([LDGMs](http://doi.org/10.1038/s41588-023-01487-8)), allowing the linear algebra computations to run 10-100x faster than other methods. Compared to older methods such as PRS-CS that solely rely on ~1.3M HapMap3 common (minor allele frequency > 1%) SNPs, it achieves a 5-10% boost by relying instead on ~14M common (minor allele frequency > 1%) SNPs from the 1000 Genomes project high coverage reference panel. It can further model summary statistics from multiple ancestries at the same time
 
 The BCFtools pgs plugin is meant as an alternative to the following methods
 
-* [LDpred](http://dx.doi.org/10.1016/j.ajhg.2015.09.001) Vilhjálmsson, BJ., Yang, J., Finucane, HK., Modeling Linkage Disequilibrium Increases Accuracy of Polygenic Risk Scores. AJHG (2015)
+* [LDpred](http://doi.org/10.1016/j.ajhg.2015.09.001) Vilhjálmsson, BJ., Yang, J., Finucane, HK., Modeling Linkage Disequilibrium Increases Accuracy of Polygenic Risk Scores. AJHG (2015)
 * [lassosum](https://doi.org/10.1002/gepi.22050) Mak, TSH., Porsch, RM., Choi, SW. et al. Polygenic scores via penalized regression on summary statistics. Genetic Epidemiology (2017)
 * [SBLUP](https://doi-org.ezp-prod1.hul.harvard.edu/10.1038/s41562-016-0016) Robinson, M., Kleinman, A., Graff, M. et al. Genetic evidence of assortative mating in humans. Nat Human Behav (2017)
 * [PRS-CS](https://doi.org/10.1038/s41467-019-09718-5) Ge, T., Chen, CY., Ni, Y. et al. Polygenic prediction via Bayesian regression and continuous shrinkage priors. Nat Commun (2019)
@@ -935,7 +933,7 @@ bcftools +pgs \
 Compute best linear unbiased predictor
 --------------------------------------
 
-The BCFtools blup plugin is inspired by the [BLUPx-ldgm](http://dx.doi.org/10.1038/s41588-023-01487-8) software, written and designed by Pouria Salehi Nowbandegani, Anthony Wilder Wohns, and Luke O’Connor, and it will apply the [best linear unbiased prediction](https://en.wikipedia.org/wiki/Best_linear_unbiased_prediction) (BLUP) model to compute improved polygenic weights starting from summary statistics following the [GWAS-VCF specification](https://github.com/MRCIEU/gwas-vcf-specification) following the MATLAB code from the [LDGM](https://github.com/awohns/ldgm) repository. This model applies an infinitesimal model for the prior effect sizes, similar to [LDpred-inf](https://doi.org/10.1016%2Fj.ajhg.2015.09.001). This model is only appropriate for very polygenic architectures such as those found in psychiatric diseases. We do not encourage the use of it for other phenotypes
+The BCFtools blup plugin is inspired by the [BLUPx-ldgm](http://doi.org/10.1038/s41588-023-01487-8) software, written and designed by Pouria Salehi Nowbandegani, Anthony Wilder Wohns, and Luke O’Connor, and it will apply the [best linear unbiased prediction](https://en.wikipedia.org/wiki/Best_linear_unbiased_prediction) (BLUP) model to compute improved polygenic weights starting from summary statistics following the [GWAS-VCF specification](https://github.com/MRCIEU/gwas-vcf-specification) following the MATLAB code from the [LDGM](https://github.com/awohns/ldgm) repository. This model applies an infinitesimal model for the prior effect sizes, similar to [LDpred-inf](https://doi.org/10.1016%2Fj.ajhg.2015.09.001). This model is only appropriate for very polygenic architectures such as those found in psychiatric diseases. We do not encourage the use of it for other phenotypes
 
 First of all, run the tool with the `--stats-only` option to evaluate the optimal `betaCov` parameter:
 ```
@@ -1001,26 +999,27 @@ bcftools +split-vep -Ou -c Consequence -i 'LP>7.3' ieu-a-298.hg38.csq.bcf | \
 
 To obtain an `rsid_vcf_file` the following code can be used:
 ```
-wget ftp://ftp.ncbi.nih.gov/snp/redesign/latest_release/VCF/GCF_000001405.39.gz{,.tbi}
+wget ftp://ftp.ncbi.nih.gov/snp/redesign/latest_release/VCF/GCF_000001405.40.gz{,.tbi}
 wget http://hgdownload.soe.ucsc.edu/goldenPath/hg38/bigZips/hg38.chromAlias.txt
 awk -F"\t" 'NR>1 {print $5"\t"$1}' hg38.chromAlias.txt | \
-bcftools annotate --no-version -Ou --rename-chrs - --remove ID,^INFO/RS GCF_000001405.39.gz | \
+bcftools annotate --no-version -Ou --rename-chrs - --remove INFO GCF_000001405.40.gz | \
 bcftools norm --no-version --output-type u --multiallelics -any \
   --targets-file <(awk '{print $1"\t1\t"$2}' GCA_000001405.15_GRCh38_no_alt_analysis_set.fna.fai) | \
 bcftools norm --no-version --output-type u --check-ref w --rm-dup none --fasta-ref GCA_000001405.15_GRCh38_no_alt_analysis_set.fna | \
 bcftools sort --output-type b --temp-dir ./bcftools. | \
-tee $HOME/GRCh38/GCF_000001405.39.GRCh38.bcf | \
-bcftools index --force --output $HOME/GRCh38/GCF_000001405.39.GRCh38.bcf.csi
+tee $HOME/GRCh38/GCF_000001405.40.GRCh38.bcf | \
+bcftools index --force --output $HOME/GRCh38/GCF_000001405.40.GRCh38.bcf.csi
 ```
 
 Similarly, you can annotate rsID numbers with
 ```
 bcftools annotate --no-version \
-  -a $HOME/GRCh38/GCF_000001405.39.GRCh38.bcf \
+  -a $HOME/GRCh38/GCF_000001405.40.GRCh38.bcf \
   -c RS -Ob ieu-a-298.hg38.bcf | \
 tee ieu-a-298.hg38.rsid.bcf | \
 bcftools index --force --output ieu-a-298.hg38.rsid.bcf.csi
 ```
+Notice that rsID numbers [cannot be encoded](https://github.com/samtools/bcftools/issues/1961) as an integer field in the VCF as starting from dbSNP build 156 there are now rsID numbers larger than 2147483647 which cannot be encoded by the current VCF binary specification
 
 Plotting
 ========
