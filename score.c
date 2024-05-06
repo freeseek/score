@@ -1,6 +1,6 @@
 /* The MIT License
 
-   Copyright (C) 2021-2023 Giulio Genovese
+   Copyright (C) 2021-2024 Giulio Genovese
 
    Author: Giulio Genovese <giulio.genovese@gmail.com>
 
@@ -36,7 +36,7 @@
 #include "filter.h"
 #include "score.h"
 
-#define SCORE_VERSION "2023-12-06"
+#define SCORE_VERSION "2024-05-05"
 
 #define FLT_INCLUDE (1 << 0)
 #define FLT_EXCLUDE (1 << 1)

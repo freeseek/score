@@ -1,6 +1,6 @@
 /* The MIT License
 
-   Copyright (C) 2022-2023 Giulio Genovese
+   Copyright (C) 2022-2024 Giulio Genovese
 
    Author: Giulio Genovese <giulio.genovese@gmail.com>
 
@@ -296,8 +296,7 @@ static int tsv_setter_chrom_flexible(tsv_t *tsv, bcf1_t *rec, void *usr) {
 int tsv_read_float_and_minus_log10(tsv_t *tsv, bcf1_t *rec, void *usr) {
     float *single = (float *)usr;
     char *ptr, *endptr;
-    for (ptr = tsv->ss; *ptr != 'e' && *ptr != 'E' && ptr < tsv->se; ptr++)
-        ;
+    for (ptr = tsv->ss; *ptr != 'e' && *ptr != 'E' && ptr < tsv->se; ptr++);
     char tmp = *ptr;
     *ptr = '\0';
     *single = strtof(tsv->ss, &endptr);

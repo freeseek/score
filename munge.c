@@ -1,6 +1,6 @@
 /* The MIT License
 
-   Copyright (C) 2022-2023 Giulio Genovese
+   Copyright (C) 2022-2024 Giulio Genovese
 
    Author: Giulio Genovese <giulio.genovese@gmail.com>
 
@@ -35,7 +35,7 @@
 #include "bcftools.h"
 #include "score.h"
 
-#define MUNGE_VERSION "2023-12-06"
+#define MUNGE_VERSION "2024-05-05"
 
 #define IFFY_TAG "IFFY"
 #define MISMATCH_TAG "REF_MISMATCH"
@@ -183,6 +183,7 @@ static const char *usage_text(void) {
            "   -O, --output-type u|b|v|z[0-9]  u/b: un/compressed BCF, v/z: un/compressed VCF, 0-9: compression level "
            "[v]\n"
            "       --threads <int>             use multithreading with INT worker threads [0]\n"
+           "   -W, --write-index[=FMT]         Automatically index the output files [off]\n"
            "\n"
            "Examples:\n"
            "      bcftools +munge -c PLINK -f human_g1k_v37.fasta -Ob -o score.bcf score.assoc\n"
@@ -198,6 +199,7 @@ int run(int argc, char **argv) {
     int i, idx;
     int cache_size = 0;
     int record_cmd_line = 1;
+    int write_index = 0;
     int output_type = FT_VCF;
     int clevel = -1;
     int n_threads = 0;
@@ -210,6 +212,7 @@ int run(int argc, char **argv) {
     const char *mismatch_tag = MISMATCH_TAG;
     const char *sample = "SAMPLE";
     const char *output_fname = "-";
+    char *index_fname;
     faidx_t *fai;
     htsFile *out_fh = NULL;
 
@@ -228,9 +231,10 @@ int run(int argc, char **argv) {
                                        {"output", required_argument, NULL, 'o'},
                                        {"output-type", required_argument, NULL, 'O'},
                                        {"threads", required_argument, NULL, 9},
+                                       {"write-index", optional_argument, NULL, 'W'},
                                        {NULL, 0, NULL, 0}};
     int c;
-    while ((c = getopt_long(argc, argv, "h?c:C:f:s:o:O:", loptions, NULL)) >= 0) {
+    while ((c = getopt_long(argc, argv, "h?c:C:f:s:o:O:W::", loptions, NULL)) >= 0) {
         switch (c) {
         case 'c':
             columns_preset = optarg;
@@ -303,6 +307,10 @@ int run(int argc, char **argv) {
         case 9:
             n_threads = (int)strtol(optarg, &tmp, 0);
             if (*tmp) error("Could not parse: --threads %s\n", optarg);
+            break;
+        case 'W':
+            if (!(write_index = write_index_parse(optarg)))
+                error("Unsupported index format '%s'\n", optarg);
             break;
         case 'h':
         case '?':
@@ -555,6 +563,8 @@ int run(int argc, char **argv) {
         }
     }
     if (bcf_hdr_write(out_fh, hdr) < 0) error("Unable to write to output VCF file\n");
+    if (init_index2(out_fh, hdr, output_fname, &index_fname, write_index) < 0)
+        error("Error: failed to initialise index for %s\n", output_fname);
 
     bcf1_t *rec = bcf_init();
     bcf_update_id(NULL, rec, NULL);
@@ -642,6 +652,13 @@ int run(int argc, char **argv) {
     }
     bcf_hdr_destroy(hdr);
     fai_destroy(fai);
+    if (write_index) {
+        if (bcf_idx_save(out_fh) < 0) {
+            if (hts_close(out_fh) != 0) error("Close failed %s\n", strcmp(output_fname, "-") ? output_fname : "stdout");
+            error("Error: cannot write to index %s\n", index_fname);
+        }
+        free(index_fname);
+    }
     if (hts_close(out_fh) < 0) error("Close failed: %s\n", out_fh->fn);
     return 0;
 }

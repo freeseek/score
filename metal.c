@@ -1,6 +1,6 @@
 /* The MIT License
 
-   Copyright (C) 2022-2023 Giulio Genovese
+   Copyright (C) 2022-2024 Giulio Genovese
 
    Author: Giulio Genovese <giulio.genovese@gmail.com>
 
@@ -33,7 +33,7 @@
 #include "bcftools.h"
 #include "filter.h"
 
-#define METAL_VERSION "2023-12-06"
+#define METAL_VERSION "2024-05-05"
 
 // Logic of the filters: include or exclude sites which match the filters?
 #define FLT_INCLUDE 1
@@ -320,6 +320,7 @@ static const char *usage_text(void) {
            "       --targets-overlap 0|1|2     Include if POS in the region (0), record overlaps (1), variant overlaps "
            "(2) [0]\n"
            "       --threads <int>             use multithreading with INT worker threads [0]\n"
+           "   -W, --write-index[=FMT]         Automatically index the output files [off]\n"
            "\n"
            "Examples:\n"
            "      bcftools +metal -Ob -o ukb_mvp.gwas.bcf -i ukb.gwas.bcf mvp.gwas.bcf\n"
@@ -359,6 +360,7 @@ int run(int argc, char **argv) {
     int het = 0;
     int esd = 0;
     int record_cmd_line = 1;
+    int write_index = 0;
     int output_type = FT_VCF;
     int clevel = -1;
     int regions_is_file = 0;
@@ -369,6 +371,7 @@ int run(int argc, char **argv) {
     char *tmp = NULL;
     const char *pathname = NULL;
     const char *output_fname = "-";
+    char *index_fname;
     const char *regions_list = NULL;
     const char *targets_list = NULL;
     const char *filter_str = NULL;
@@ -396,9 +399,10 @@ int run(int argc, char **argv) {
                                        {"targets-file", required_argument, NULL, 'T'},
                                        {"targets-overlap", required_argument, NULL, 6},
                                        {"threads", required_argument, NULL, 9},
+                                       {"write-index", optional_argument, NULL, 'W'},
                                        {NULL, 0, NULL, 0}};
     int c;
-    while ((c = getopt_long(argc, argv, "h?e:i:o:O:r:R:t:T:", loptions, NULL)) >= 0) {
+    while ((c = getopt_long(argc, argv, "h?e:i:o:O:r:R:t:T:W::", loptions, NULL)) >= 0) {
         switch (c) {
         case 1:
             pathname = optarg;
@@ -490,6 +494,10 @@ int run(int argc, char **argv) {
         case 9:
             n_threads = (int)strtol(optarg, &tmp, 0);
             if (*tmp) error("Could not parse: --threads %s\n", optarg);
+            break;
+        case 'W':
+            if (!(write_index = write_index_parse(optarg)))
+                error("Unsupported index format '%s'\n", optarg);
             break;
         case 'h':
         case '?':
@@ -672,6 +680,8 @@ int run(int argc, char **argv) {
     if (n_threads) hts_set_opt(out_fh, HTS_OPT_THREAD_POOL, sr->p);
     if (record_cmd_line) bcf_hdr_append_version(out_hdr, argc, argv, "bcftools_metal");
     if (bcf_hdr_write(out_fh, out_hdr) < 0) error("Unable to write to output VCF file\n");
+    if (init_index2(out_fh, hdr, output_fname, &index_fname, write_index) < 0)
+        error("Error: failed to initialise index for %s\n", output_fname);
 
     // process GWAS-VCF rows
     float *val_arr = (float *)malloc(sizeof(float) * SIZE * n_smpl);
@@ -830,6 +840,13 @@ int run(int argc, char **argv) {
     if (pathname) {
         for (j = 0; j < n_files; j++) free(filenames[j]);
         free(filenames);
+    }
+    if (write_index) {
+        if (bcf_idx_save(out_fh) < 0) {
+            if (hts_close(out_fh) != 0) error("Close failed %s\n", strcmp(output_fname, "-") ? output_fname : "stdout");
+            error("Error: cannot write to index %s\n", index_fname);
+        }
+        free(index_fname);
     }
     if (hts_close(out_fh) < 0) error("Close failed: %s\n", out_fh->fn);
     bcf_sr_destroy(sr);

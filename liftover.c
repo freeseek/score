@@ -1,6 +1,6 @@
 /* The MIT License
 
-   Copyright (C) 2022-2023 Giulio Genovese
+   Copyright (C) 2022-2024 Giulio Genovese
 
    Author: Giulio Genovese <giulio.genovese@gmail.com>
 
@@ -36,7 +36,7 @@
 #include "htslib/khash.h" // required to reset the contigs dictionary and table
 KHASH_MAP_INIT_STR(vdict, bcf_idinfo_t)
 
-#define LIFTOVER_VERSION "2023-12-06"
+#define LIFTOVER_VERSION "2024-05-05"
 
 #define FLIP_TAG "FLIP"
 #define SWAP_TAG "SWAP"
@@ -491,6 +491,10 @@ const char *usage(void) {
            "About: Lift over a VCF from one genome build to another. "
            "(version " LIFTOVER_VERSION
            " https://github.com/freeseek/score)\n"
+           "[ Genovese, G., et al. BCFtools/liftover: an accurate and comprehensive tool to convert genetic variants\n"
+           "across genome assemblies. Bioinformatics 40, Issue 2 (2024) http://doi.org/10.1093/bioinformatics/btae038 "
+           "]\n"
+           "\n"
            "Usage: bcftools +liftover [General Options] -- [Plugin Options]\n"
            "Options:\n"
            "   run \"bcftools plugin\" for a list of common options\n"
@@ -533,10 +537,10 @@ const char *usage(void) {
            "]\n"
            "\n"
            "Examples:\n"
-           "      bcftools +liftover -Ob -o output.hg38.bcf input.hg19.bcf -- \\\n"
-           "        -s human_g1k_v37.fasta -f Homo_sapiens_assembly38.fasta -c hg19ToHg38.over.chain.gz\n"
-           "      bcftools +liftover -Oz -o chm13v2.0_dbSNPv156.vcf.gz GRCh38_dbSNPv156.vcf.gz -- \\\n"
-           "        -s Homo_sapiens_assembly38.fasta -f chm13v2.0.fa -c hg38ToHs1.over.chain.gz\n"
+           "      bcftools +liftover -Ou input.hg19.bcf -- -s hg19.fa -f hg38.fa \\\n"
+           "        -c hg19ToHg38.over.chain.gz | bcftools sort -Ob -o output.hg38.bcf -W\n"
+           "      bcftools +liftover -Ou GRCh38_dbSNPv156.vcf.gz -- -s hg38.fa -f chm13v2.0.fa \\\n"
+           "        -c hg38ToHs1.over.chain.gz | bcftools sort -Oz -o chm13v2.0_dbSNPv156.vcf.gz -W=tbi\n"
            "\n"
            "To obtain liftover chain files:\n"
            "      wget http://hgdownload.cse.ucsc.edu/goldenpath/hg19/liftOver/hg19ToHg38.over.chain.gz\n"
@@ -873,15 +877,15 @@ int init(int argc, char **argv, bcf_hdr_t *in, bcf_hdr_t *out) {
     int *info_rules = (int *)calloc(sizeof(int), in->n[BCF_DT_ID]);
     int *fmt_rules = (int *)calloc(sizeof(int), in->n[BCF_DT_ID]);
     find_AGR_tags(in, info_rules, fmt_rules);
-    assign_tags(in, drop_tags, 1 << BCF_VL_FIXED | 1 << BCF_VL_VAR | 1 << BCF_VL_A | 1 << BCF_VL_G | 1 << BCF_VL_R,
-                1 << BCF_HT_FLAG | 1 << BCF_HT_INT | 1 << BCF_HT_REAL | 1 << BCF_HT_STR, RULE_DROP, info_rules,
-                fmt_rules);
     assign_tags(in, ac_tags, 1 << BCF_VL_A, 1 << BCF_HT_INT | 1 << BCF_HT_REAL, RULE_AC, info_rules, fmt_rules);
     assign_tags(in, af_tags, 1 << BCF_VL_A, 1 << BCF_HT_REAL, RULE_AF, info_rules, fmt_rules);
     assign_tags(in, ds_tags, 1 << BCF_VL_A, 1 << BCF_HT_REAL, RULE_DS, info_rules, fmt_rules);
     assign_tags(in, gt_tags, 1 << BCF_VL_FIXED | 1 << BCF_VL_VAR | 1 << BCF_VL_A | 1 << BCF_VL_G | 1 << BCF_VL_R,
                 1 << BCF_HT_INT, RULE_GT, info_rules, fmt_rules);
     assign_tags(in, es_tags, 1 << BCF_VL_A, 1 << BCF_HT_INT | 1 << BCF_HT_REAL | 1 << BCF_HT_STR, RULE_ES, info_rules,
+                fmt_rules);
+    assign_tags(in, drop_tags, 1 << BCF_VL_FIXED | 1 << BCF_VL_VAR | 1 << BCF_VL_A | 1 << BCF_VL_G | 1 << BCF_VL_R,
+                1 << BCF_HT_FLAG | 1 << BCF_HT_INT | 1 << BCF_HT_REAL | 1 << BCF_HT_STR, RULE_DROP, info_rules,
                 fmt_rules);
     args->n_tags = compress_tags(info_rules, fmt_rules, in->n[BCF_DT_ID], &args->tags);
     free(info_rules);
@@ -2150,7 +2154,7 @@ static void reverse_A_record(const bcf_hdr_t *hdr, bcf1_t *rec, int int_id, int 
                 else if (is_vector_end)                                                                                \
                     set_vector_end;                                                                                    \
                 else {                                                                                                 \
-                    value -= (out_type_t)*src;                                                                         \
+                    value -= (out_type_t) * src;                                                                       \
                     *dst = *src;                                                                                       \
                 }                                                                                                      \
                 src++;                                                                                                 \

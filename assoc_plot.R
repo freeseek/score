@@ -2,7 +2,7 @@
 ###
 #  The MIT License
 #
-#  Copyright (C) 2021-2023 Giulio Genovese
+#  Copyright (C) 2021-2024 Giulio Genovese
 #
 #  Author: Giulio Genovese <giulio.genovese@gmail.com>
 #
@@ -27,7 +27,7 @@
 
 options(error = function() {traceback(3); q()})
 
-assoc_plot_version <- '2023-09-19'
+assoc_plot_version <- '2024-05-05'
 
 suppressPackageStartupMessages(library(optparse))
 suppressPackageStartupMessages(library(data.table))
@@ -154,7 +154,7 @@ if ( !is.null(args$vcf) ) {
   } else {
     filter <- paste0('$lp!="NA" && $lp>=', args$min_lp)
   }
-  cmd <- paste(cmd, '| awk \'NR==1 {for (i=1; i<=NF; i++) f[$i] = i; if ("CHROM" in f) chrom=f["CHROM"]; else chrom=f["#CHROM"]; if ("GENPOS" in f) pos=f["GENPOS"]; else pos=f["POS"]; if ("A1FREQ" in f) af=f["A1FREQ"]; else af=f["A1_FREQ"]; if ("LOG10P" in f) lp=f["LOG10P"]; else lp=f["LOG10_P"]} NR==1 || NR>1 &&', filter , '{print $chrom"\\t"$pos"\\t"$lp}\'')
+  cmd <- paste(cmd, '| awk \'NR==1 {for (i=1; i<=NF; i++) f[$i] = i; if ("CHROM" in f) chrom=f["CHROM"]; else chrom=f["#CHROM"]; if ("GENPOS" in f) pos=f["GENPOS"]; else pos=f["POS"]; if ("A1FREQ" in f) af=f["A1FREQ"]; else af=f["A1_FREQ"]; if ("NEG_LOG10_P" in f) lp=f["NEG_LOG10_P"]; else if ("LOG10P" in f) lp=f["LOG10P"]; else lp=f["LOG10_P"]} NR==1 || NR>1 &&', filter , '{print $chrom"\\t"$pos"\\t"$lp}\'')
   names <- c('chrom', 'pos', 'lp')
 }
 

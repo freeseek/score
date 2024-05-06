@@ -1,6 +1,6 @@
 /* The MIT License
 
-   Copyright (C) 2022-2023 Giulio Genovese
+   Copyright (C) 2022-2024 Giulio Genovese
 
    Author: Giulio Genovese <giulio.genovese@gmail.com>
 
@@ -37,7 +37,7 @@
 #include "filter.h"
 #include "cholmod.h"
 
-#define PGS_VERSION "2023-12-06"
+#define PGS_VERSION "2024-05-05"
 
 #define AVERAGE_LD_SCORE_DFLT 72.6
 #define EXPECTED_RATIO_DFLT 0.6
@@ -1604,7 +1604,7 @@ static const char *usage(void) {
            "About: Compute loadings with GraphPred model from GWAS-VCF summary statistics.\n"
            "[ Nowbandegani, P. S., Wohns, A. W., et al. Extremely sparse models of linkage disequilibrium in "
            "ancestrally\n"
-           "diverse association studies. bioRxiv, (2023) http://doi.org/10.1038/s41588-023-01487-8 ]\n"
+           "diverse association studies. Nat Genet, 55, 1494–1502, (2023) http://doi.org/10.1038/s41588-023-01487-8 ]\n"
            "\n"
            "Usage: bcftools +pgs [options] <score.gwas.vcf.gz> [<ldgm.vcf.gz> <ldgm2.vcf.gz> ...]\n"
            "Plugin options:\n"
@@ -1636,6 +1636,7 @@ static const char *usage(void) {
            "       --targets-overlap 0|1|2     Include if POS in the region (0), record overlaps (1), variant overlaps "
            "(2) [0]\n"
            "       --threads <int>             use multithreading with INT worker threads [0]\n"
+           "   -W, --write-index[=FMT]         Automatically index the output files [off]\n"
            "\n"
            "Model options:\n"
            "       --stats-only                only compute suggested summary options for a given alpha parameter\n"
@@ -1716,6 +1717,7 @@ int run(int argc, char **argv) {
     char **filenames = NULL;
     int filter_logic = 0;
     int record_cmd_line = 1;
+    int write_index = 0;
     int output_type = FT_VCF;
     int clevel = -1;
     int regions_is_file = 0;
@@ -1726,6 +1728,7 @@ int run(int argc, char **argv) {
     int n_threads = 0;
     char *tmp = NULL;
     const char *output_fname = "-";
+    char *index_fname;
     const char *regions_list = NULL;
     const char *sample_list = NULL;
     const char *targets_list = NULL;
@@ -1762,6 +1765,7 @@ int run(int argc, char **argv) {
                                        {"targets-file", required_argument, NULL, 'T'},
                                        {"targets-overlap", required_argument, NULL, 6},
                                        {"threads", required_argument, NULL, 9},
+                                       {"write-index", optional_argument, NULL, 'W'},
                                        {"stats-only", no_argument, NULL, 7},
                                        {"seed", required_argument, NULL, 10},
                                        {"average-ld-score", required_argument, NULL, 11},
@@ -1785,7 +1789,7 @@ int run(int argc, char **argv) {
                                        {"chunk-size", required_argument, NULL, 26},
                                        {NULL, 0, NULL, 0}};
     int c;
-    while ((c = getopt_long(argc, argv, "h?ve:i:o:O:l:r:R:s:S:t:T:a:b:x:", loptions, NULL)) >= 0) {
+    while ((c = getopt_long(argc, argv, "h?ve:i:o:O:l:r:R:s:S:t:T:W::a:b:x:", loptions, NULL)) >= 0) {
         switch (c) {
         case 'v':
             verbose++;
@@ -1899,6 +1903,10 @@ int run(int argc, char **argv) {
         case 9:
             n_threads = (int)strtol(optarg, &tmp, 10);
             if (*tmp) error("Could not parse: --threads %s\n", optarg);
+            break;
+        case 'W':
+            if (!(write_index = write_index_parse(optarg)))
+                error("Unsupported index format '%s'\n", optarg);
             break;
         case 7:
             stats_only = 1;
@@ -2188,6 +2196,8 @@ int run(int argc, char **argv) {
             error_errno("[%s] Failed to add \"%s\" FORMAT header", id_str[GW], __func__);
         if (record_cmd_line) bcf_hdr_append_version(out_hdr, argc, argv, "bcftools_pgs");
         if (bcf_hdr_write(out_fh, out_hdr) < 0) error("Unable to write to output VCF file\n");
+        if (init_index2(out_fh, hdr, output_fname, &index_fname, write_index) < 0)
+            error("Error: failed to initialise index for %s\n", output_fname);
     }
 
     map_t map = {0, NULL, 0, NULL, 0, NULL, 0};
@@ -2475,6 +2485,14 @@ int run(int argc, char **argv) {
     cholmod_finish(&cm); // cholmod structures destruction
     if (filter) filter_destroy(filter);
     if (!stats_only) {
+        if (write_index) {
+            if (bcf_idx_save(out_fh) < 0) {
+                if (hts_close(out_fh) != 0)
+                    error("Close failed %s\n", strcmp(output_fname, "-") ? output_fname : "stdout");
+                error("Error: cannot write to index %s\n", index_fname);
+            }
+            free(index_fname);
+        }
         if (hts_close(out_fh) < 0) error("Close failed: %s\n", out_fh->fn);
         bcf_hdr_destroy(out_hdr);
     }
