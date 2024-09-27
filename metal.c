@@ -30,16 +30,18 @@
 #include <htslib/kfunc.h>
 #include <htslib/synced_bcf_reader.h>
 #include <htslib/vcf.h>
+#include <htslib/khash_str2int.h>
+#include "kmin.h"
 #include "bcftools.h"
 #include "filter.h"
 
-#define METAL_VERSION "2024-05-05"
+#define METAL_VERSION "2024-09-27"
 
 // Logic of the filters: include or exclude sites which match the filters?
 #define FLT_INCLUDE 1
 #define FLT_EXCLUDE 2
 
-// https://github.com/MRCIEU/gwas-vcf-specification
+// http://github.com/MRCIEU/gwas-vcf-specification
 #define NS 0
 #define EZ 1
 #define NC 2
@@ -73,9 +75,9 @@ static const char *desc_str[SIZE + 1] = {
  ****************************************/
 
 // Cody, W. J. Algorithm 715: SPECFUN–a portable FORTRAN package of special function routines and test drivers. ACM
-// Trans. Math. Softw. 19, 22–30 (1993). https://doi.org/10.1145/151271.151273 ANORM function see pnorm_both() in
-// https://github.com/wch/r-source/blob/trunk/src/nmath/pnorm.c see logndist() in
-// https://github.com/statgen/METAL/blob/master/libsrc/MathStats.cpp
+// Trans. Math. Softw. 19, 22–30 (1993). http://doi.org/10.1145/151271.151273 ANORM function see pnorm_both() in
+// http://github.com/wch/r-source/blob/trunk/src/nmath/pnorm.c see logndist() in
+// http://github.com/statgen/METAL/blob/master/libsrc/MathStats.cpp
 #define M_SQRT_32 5.656854249492380195206754896838    /* sqrt(32) */
 #define M_1_SQRT_2PI 0.398942280401432677939946059934 /* 1/sqrt(2pi) */
 // this function is equivalent to pnorm(-z, log.p = TRUE) but with lower precision for -37.5193 < z < -0.67448975
@@ -146,9 +148,9 @@ static double log_ndist(double z) {
 #define M_2PI 6.283185307179586476925286766559 /* 2*pi */
 
 // Wichura, M. J. Algorithm AS 241: The Percentage Points of the Normal Distribution. Applied Statistics 37, 477 (1988).
-// https://doi.org/10.2307/2347330 PPND16 function (algorithm AS241) http://lib.stat.cmu.edu/apstat/241
-// see qnorm5() in https://github.com/wch/r-source/blob/trunk/src/nmath/qnorm.c
-// see ninv() in https://github.com/statgen/METAL/blob/master/libsrc/MathStats.cpp
+// http://doi.org/10.2307/2347330 PPND16 function (algorithm AS241) http://lib.stat.cmu.edu/apstat/241
+// see qnorm5() in http://github.com/wch/r-source/blob/trunk/src/nmath/qnorm.c
+// see ninv() in http://github.com/statgen/METAL/blob/master/libsrc/MathStats.cpp
 // this function is equivalent to qnorm(log_p, log.p = TRUE)
 static double inv_log_ndist(double log_p) {
     const double a0 = 3.3871328727963666080E0;
@@ -236,10 +238,10 @@ static double inv_log_ndist(double log_p) {
     return q < 0 ? -x : x;
 }
 
-// see pchisq() in https://github.com/wch/r-source/blob/trunk/src/nmath/pchisq.c
-// see pgamma() in https://github.com/wch/r-source/blob/trunk/src/nmath/pgamma.c
-// see chidist() in https://github.com/statgen/METAL/blob/master/libsrc/MathStats.cpp
-// see kf_gammaq() in https://github.com/samtools/htslib/blob/develop/kfunc.c
+// see pchisq() in http://github.com/wch/r-source/blob/trunk/src/nmath/pchisq.c
+// see pgamma() in http://github.com/wch/r-source/blob/trunk/src/nmath/pgamma.c
+// see chidist() in http://github.com/statgen/METAL/blob/master/libsrc/MathStats.cpp
+// see kf_gammaq() in http://github.com/samtools/htslib/blob/develop/kfunc.c
 #define KF_GAMMA_EPS 1e-14
 #define KF_TINY 1e-290
 // regularized lower incomplete gamma function, by series expansion
@@ -280,6 +282,231 @@ static double kf_log_gammaq(double s, double z) {
 static double log_chidist(double x, double df) { return kf_log_gammaq(ldexp(df, -1), ldexp(x, -1)); }
 
 /****************************************
+ * FUNCTIONS TO COMPUTE SAMPLE OVERLAP  *
+ ****************************************/
+
+inline static double sqr(double x) { return x * x; }
+
+// given a correlation rho, compute the truncated correlation E(Z_1*Z_2 | |Z_1|<1, |Z_2|<1)
+// it uses the Taylor expansion for the integral of the truncated binormal function
+// E(X,Y | |X|<1, |Y|<1) with p(X,Y) = phi(0, 0, 1, 1, rho)
+// to compute the coefficients in MATALB it is enough to run the following code
+// format long
+// syms x y r;
+// n = 10;
+// z = exp(-(x^2 - 2*x*y*r + y^2) / (2 * (1 - r^2)));
+// f = int(int(taylor(taylor(x*y*z,x,'Order',2*n+1),y,'Order',2*n+1),x,-1,1),y,0,1);
+// g = int(int(taylor(taylor(z,x,'Order',2*n+1),y,'Order',2*n+1),x,-1,1),y,0,1);
+// h = taylor(f/g,'Order',2*n+1);
+// double(flip(coeffs(h)))
+// compared to Daniel Taliun's implementation in METAL, this only works for the default ZCUTOFF = 1
+static const double coeffs[] = {-0.001022581561869, -0.000154965510526, 0.001823819860201, 0.005329762062430,
+                                0.010828170105212,  0.018814910112783,  0.029788243721651, 0.044210103114571,
+                                0.062456053780874,  0.084753820798725};
+static double rho2trunc_rho(double rho) {
+    int i;
+    double rho2 = sqr(rho);
+    double trunc_rho = coeffs[0];
+    for (i = 1; i < sizeof(coeffs) / sizeof(double); i++) {
+        trunc_rho *= rho2;
+        trunc_rho += coeffs[i];
+    }
+    return trunc_rho * rho;
+}
+
+static double f(double rho, void *trunc_rho) {
+    if (rho < 0.0 || rho > 1.0) return INFINITY;
+    return fabs(rho2trunc_rho(rho) - *((double *)trunc_rho));
+}
+
+// given the truncated correlation E(Z_1*Z_2 | |Z_1|<1, |Z_2|<1) compute the correlation rho
+// it uses the idea of truncated Z-scores to estimate the correlation, as explained in Sengupta, S. 2018
+static double trunc_rho2rho(double trunc_rho) {
+    if (trunc_rho < 0.0) return 0.0;
+    double rho;
+    kmin_brent(f, 0.1, 0.2, &trunc_rho, KMIN_EPS, &rho);
+    return rho;
+}
+
+// in Sengupta, S. Improved Analysis of Large Genetic Association Studies Using Summary Statistics.
+// The University of Michigan, 2018 http://hdl.handle.net/2027.42/143992 the mathematics is wrong
+// (see also http://genome.sph.umich.edu/wiki/METAL_Documentation#Sample_Overlap_Correction
+// and http://genome.sph.umich.edu/w/images/7/7b/METAL_sample_overlap_method_2017-11-15.pdf)
+// R_{ij} is expected to be the the fraction of samples shared between study i and j
+// Sample size based meta-analysis can be computed with the following formulas:
+// w_i = \sqrt(N_i)
+// N = \sum_{i,j} w_i (R^{-1})_{ij} w_j
+// Z = \sum_{i,j} Z_i (R^{-1})_{ij} w_j / \sqrt{N}
+// P = 2 \Phi(-|Z|)
+// For a pair of study this gives (contrary to what developed by Sebanti Sengupta and implemented by Daniel Taliun)
+// N = (n_1 + n_2 - 2 \sqrt{n_1 n_2} r_{12}) / (1 - r_{12}^2) and not n_1 + n_2 - \sqrt{n_1 n_2} r_{12}
+// Z = (Z_1 (w_1 - w_2 r_{12}) + Z_2 (w_2 - w_1 r_{12})) / ((1 - r_{12}^2) \sqrt{N})
+// and not (w_1 Z_1 + w_2 Z_2) / \sqrt{w_1^2 + w_2^2 + 2 w_1 w_2 r_{12}}
+// Inverse variance based meta-analysis can be computed with the following formulas:
+// w_i = 1 / se_i (and not w_i = 1 / se_i^2 as in METAL without sample overlap correction)
+// N = \sum_{i,j} w_i (R^{-1})_{ij} w_j
+// se = \sqrt{1/N}
+// \beta = \sum_{i,j} \beta_i w_i (R^{-1})_{ij} w_j / N
+// Z = \beta / se
+// P = 2 \Phi(-|Z|)
+// these formulas can be expanded for a pair of study with the following MATLAB code:
+// syms z1 z2 w1 w2 r12;
+// R = [1 r12; r12 1];
+// N = simplify([w1 w2] * inv(R) * [w1; w2]);
+// W = simplify([w1 w2] * inv(R) * diag([w1; w2]));
+// simplify(sum(W) / N) % this needs to be 1
+// Z = simplify([w1 w2] * inv(R) * [z1; z2] / sqrt(N));
+
+// Function to compute the inverse of a matrix
+static double *invert_matrix(double *A, int n) {
+    // Initialize A_inv to the identity matrix
+    double *A_inv = (double *)calloc(n * n, sizeof(double));
+    for (int i = 0; i < n; i++) A_inv[i * n + i] = 1.0;
+
+    for (int i = 0; i < n; i++) {
+        // Find the pivot element
+        int max = i;
+        for (int k = i + 1; k < n; k++) {
+            if (abs(A[k * n + i]) > abs(A[max * n + i])) {
+                max = k;
+            }
+        }
+
+        // Swap rows in A and I
+        for (int k = 0; k < n; k++) {
+            double temp = A[i * n + k];
+            A[i * n + k] = A[max * n + k];
+            A[max * n + k] = temp;
+
+            temp = A_inv[i * n + k];
+            A_inv[i * n + k] = A_inv[max * n + k];
+            A_inv[max * n + k] = temp;
+        }
+
+        // Eliminate elements below the pivot
+        for (int k = i + 1; k < n; k++) {
+            double factor = A[k * n + i] / A[i * n + i];
+            for (int j = 0; j < n; j++) {
+                A[k * n + j] -= factor * A[i * n + j];
+                A_inv[k * n + j] -= factor * A_inv[i * n + j];
+            }
+        }
+    }
+
+    // Back substitution
+    for (int i = n - 1; i >= 0; i--) {
+        double factor = A[i * n + i];
+        for (int j = 0; j < n; j++) {
+            A[i * n + j] /= factor;
+            A_inv[i * n + j] /= factor;
+        }
+        for (int k = 0; k < i; k++) {
+            factor = A[k * n + i];
+            for (int j = 0; j < n; j++) {
+                A[k * n + j] -= factor * A[i * n + j];
+                A_inv[k * n + j] -= factor * A_inv[i * n + j];
+            }
+        }
+    }
+
+    return A_inv;
+}
+
+/****************************************
+ * HASH TABLES FOR INVERSE MATRICES     *
+ ****************************************/
+
+// this structure should store temporary inverted matrices to be used
+typedef struct {
+    int n;                     // number of studies
+    int idx;                   // index of last inverse correlation matrix
+    char *hash_str;            // hash to be used to retrieve a matrix
+    int n_counter;             // number of different matrix required
+    int m_counter;             // number of different matrix required
+    int *counter;              // when counter reaches zero, inverse matrix should be removed
+    double *tmp_matrix;        // temporary space to store matrix to invert
+    double **inv_cor_matrices; // matrices should be added and removed as you go
+    void *hash;                // hash table
+} inv_cor_hash_t;
+
+static void inv_cor_hash_init(inv_cor_hash_t *this, int n) {
+    this->n = n;
+    this->hash_str = (char *)malloc((n + 1) * sizeof(char));
+    this->hash_str[n] = '\0';
+    this->n_counter = 0;
+    this->m_counter = 0;
+    this->counter = NULL;
+    this->tmp_matrix = (double *)malloc(n * n * sizeof(double));
+    this->inv_cor_matrices = NULL;
+    this->hash = khash_str2int_init();
+}
+
+static void inv_cor_hash_alloc(inv_cor_hash_t *this) {
+    this->inv_cor_matrices = (double **)calloc(this->n_counter, sizeof(double *));
+}
+
+static void inv_cor_hash_add(inv_cor_hash_t *this, const double *zs) {
+    int k;
+    for (k = 0; k < this->n; k++) this->hash_str[k] = isnan(zs[k]) ? '0' : '1';
+    if (khash_str2int_get(this->hash, this->hash_str, &this->idx) < 0) {
+        this->idx = khash_str2int_inc(this->hash, strdup(this->hash_str));
+        if (this->idx >= this->n_counter) {
+            this->n_counter = this->idx + 1;
+            hts_expand0(int, this->n_counter, this->m_counter, this->counter);
+        }
+    }
+    this->counter[this->idx]++;
+}
+
+// this function will retrieve the correct inverse correlation matrix for a given set of studies
+// if the inverse correlation matrix has already been previously computed, it will be reload from memory
+// if the inverse correlation matrix has never been previosly computed, it will be computed from the input matrix
+static const double *inv_cor_hash_get_matrix(inv_cor_hash_t *this, const double *zs, const double *A) {
+    int k, m, n = 0;
+    for (k = 0; k < this->n; k++)
+        if (isnan(zs[k])) {
+            this->hash_str[k] = '0';
+        } else {
+            this->hash_str[k] = '1';
+            n++;
+        }
+    int ret = khash_str2int_get(this->hash, this->hash_str, &this->idx);
+    if (ret < 0) error("Required inverse correlation matrix could not be retrieved\n");
+    this->counter[this->idx]--;
+    if (this->inv_cor_matrices[this->idx]) return this->inv_cor_matrices[this->idx];
+    // populate the correlation matrix to invert
+    double *ptr = this->tmp_matrix;
+    for (k = 0; k < this->n; k++) {
+        if (this->hash_str[k] == '0') {
+            A += this->n;
+            continue;
+        }
+        for (m = 0; m < this->n; m++) {
+            if (this->hash_str[m] == '0') {
+                A++;
+                continue;
+            }
+            *ptr++ = *A++;
+        }
+    }
+    this->inv_cor_matrices[this->idx] = invert_matrix(this->tmp_matrix, n);
+    return this->inv_cor_matrices[this->idx];
+}
+
+static void inv_cor_hash_clear(inv_cor_hash_t *this) {
+    if (this->counter[this->idx] == 0) free(this->inv_cor_matrices[this->idx]);
+}
+
+static void inv_cor_hash_destroy(inv_cor_hash_t *this) {
+    free(this->hash_str);
+    free(this->counter);
+    free(this->tmp_matrix);
+    //    for (this->idx = 0; this->idx < this->n_counter; this->idx++) free(this->inv_cor_matrices[this->idx]);
+    free(this->inv_cor_matrices);
+    khash_str2int_destroy_free(this->hash);
+}
+
+/****************************************
  * PLUGIN                               *
  ****************************************/
 
@@ -289,9 +516,13 @@ static const char *usage_text(void) {
     return "\n"
            "About: Run meta-analysis from GWAS-VCF summary statistics. "
            "(version " METAL_VERSION
-           " https://github.com/freeseek/score)\n"
+           " http://github.com/freeseek/score)\n"
            "[ Willer, C. J., Li, Y. & Abecasis, G. R. METAL: fast and efficient meta-analysis of genomewide\n"
            "association scans. Bioinformatics 26, 2190–2191 (2010) http://doi.org/10.1093/bioinformatics/btq340 ]\n"
+           "[ Sengupta, S. Improved Analysis of Large Genetic Association Studies Using Summary Statistics.\n"
+           "The University of Michigan, 2018 http://hdl.handle.net/2027.42/143992 ]\n"
+           "[ Lin, D. & Sullivan, P. F. Meta-Analysis of Genome-wide Association Studies with Overlapping Subjects.\n"
+           "The American Journal of Human Genetics 85, 862–872 (2009) http://doi.org/10.1016/j.ajhg.2009.11.001 ]\n"
            "\n"
            "Usage: bcftools +metal [options] <score1.gwas.vcf.gz> "
            "<score2.gwas.vcf.gz> [<score3.gwas.vcf.gz> ...]\n"
@@ -305,6 +536,8 @@ static const char *usage_text(void) {
            "                                   rather than inverse-variance weighted scheme\n"
            "       --het                       perform heterogenity analysis\n"
            "       --esd                       output effect size direction across studies\n"
+           "       --overlap                   perform sample overlap correction\n"
+           "       --print-corr                print correlation matrix to stderr\n"
            "       --no-version                do not append version and command line to the header\n"
            "   -o, --output <file>             write output to a file [no output]\n"
            "   -O, --output-type u|b|v|z[0-9]  u/b: un/compressed BCF, v/z: un/compressed VCF, 0-9: compression level "
@@ -354,11 +587,13 @@ static inline int filter_test_with_logic(filter_t *filter, bcf1_t *line, uint8_t
 }
 
 int run(int argc, char **argv) {
-    int i, j, k, l, rid, idx;
+    int iter, i, j, k, l, m, rid, idx;
     int filter_logic = 0;
     int szw = 0;
     int het = 0;
     int esd = 0;
+    int overlap = 0;
+    int print_corr = 0;
     int record_cmd_line = 1;
     int write_index = 0;
     int output_type = FT_VCF;
@@ -389,15 +624,17 @@ int run(int argc, char **argv) {
                                        {"szw", no_argument, NULL, 2},
                                        {"het", no_argument, NULL, 3},
                                        {"esd", no_argument, NULL, 4},
+                                       {"overlap", no_argument, NULL, 5},
+                                       {"print-corr", no_argument, NULL, 6},
                                        {"no-version", no_argument, NULL, 8},
                                        {"output", required_argument, NULL, 'o'},
                                        {"output-type", required_argument, NULL, 'O'},
                                        {"regions", required_argument, NULL, 'r'},
                                        {"regions-file", required_argument, NULL, 'R'},
-                                       {"regions-overlap", required_argument, NULL, 5},
+                                       {"regions-overlap", required_argument, NULL, 7},
                                        {"targets", required_argument, NULL, 't'},
                                        {"targets-file", required_argument, NULL, 'T'},
-                                       {"targets-overlap", required_argument, NULL, 6},
+                                       {"targets-overlap", required_argument, NULL, 10},
                                        {"threads", required_argument, NULL, 9},
                                        {"write-index", optional_argument, NULL, 'W'},
                                        {NULL, 0, NULL, 0}};
@@ -425,6 +662,12 @@ int run(int argc, char **argv) {
             break;
         case 4:
             esd = 1;
+            break;
+        case 5:
+            overlap = 1;
+            break;
+        case 6:
+            print_corr = 1;
             break;
         case 8:
             record_cmd_line = 0;
@@ -464,7 +707,7 @@ int run(int argc, char **argv) {
             regions_list = optarg;
             regions_is_file = 1;
             break;
-        case 5:
+        case 7:
             if (!strcasecmp(optarg, "0"))
                 regions_overlap = 0;
             else if (!strcasecmp(optarg, "1"))
@@ -481,7 +724,7 @@ int run(int argc, char **argv) {
             targets_list = optarg;
             targets_is_file = 1;
             break;
-        case 6:
+        case 10:
             if (!strcasecmp(optarg, "0"))
                 targets_overlap = 0;
             else if (!strcasecmp(optarg, "1"))
@@ -496,8 +739,7 @@ int run(int argc, char **argv) {
             if (*tmp) error("Could not parse: --threads %s\n", optarg);
             break;
         case 'W':
-            if (!(write_index = write_index_parse(optarg)))
-                error("Unsupported index format '%s'\n", optarg);
+            if (!(write_index = write_index_parse(optarg))) error("Unsupported index format '%s'\n", optarg);
             break;
         case 'h':
         case '?':
@@ -508,6 +750,8 @@ int run(int argc, char **argv) {
     }
 
     if ((pathname && optind != argc) || (!pathname && optind + 2 > argc)) error("%s", usage_text());
+
+    if (!overlap && print_corr) error("Option --print-corr requires option --overlap.\n");
 
     if (filter_logic == (FLT_EXCLUDE | FLT_INCLUDE)) error("Only one of --include or --exclude can be given.\n");
 
@@ -615,11 +859,13 @@ int run(int argc, char **argv) {
     int *i2n = (int *)calloc(sizeof(int), n_smpl);
     int **i_k2j = (int **)malloc(sizeof(int *) * n_smpl);
     int **i_k2l = (int **)malloc(sizeof(int *) * n_smpl);
+    int max_n = 0;
     for (i = 0; i < n_smpl; i++) {
         for (j = 0; j < n_files; j++) {
             hdr = bcf_sr_get_header(sr, j);
             if (bcf_hdr_id2int(hdr, BCF_DT_SAMPLE, out_hdr->samples[i]) != -1) i2n[i]++;
         }
+        if (max_n < i2n[i]) max_n = i2n[i];
         i_k2j[i] = (int *)malloc(sizeof(int) * i2n[i]);
         i_k2l[i] = (int *)malloc(sizeof(int) * i2n[i]);
         int output_ns = 1;
@@ -649,16 +895,21 @@ int run(int argc, char **argv) {
     // add FORMAT header fields
     if (szw) { // sample-size weighted scheme
         output[EZ] = 1;
-        output[NE] = 1;
     } else { // inverse-variance weighted scheme
         output[ES] = 1;
         output[SE] = 1;
-        if (output[NC]) output[NE] = 1;
+        if (output[NS]) output[NE] = 1;
     }
     output[LP] = 1;
     if (het) { // Cochran's Q test
         output[CQ] = 1;
         output[I2] = 1;
+    }
+    if (overlap) {
+        output[NS] = 0;
+        output[NC] = 0;
+        output[AC] = 0;
+        output[NE] = 1;
     }
     for (idx = 0; idx < SIZE; idx++)
         if (output[idx]
@@ -672,6 +923,28 @@ int run(int argc, char **argv) {
                < 0)
         error_errno("Failed to add \"%s\" FORMAT header", id_str[SIZE]);
     if (bcf_hdr_sync(out_hdr) < 0) error_errno("Failed to update header");
+
+    // allocate memory for a variable that will record first the Z-scores for each study and
+    // then the weight for each study and a variable for the correlation matrices
+    double **overlap_ws = NULL, **overlap_zs = NULL, **overlap_afs = NULL, **overlap_sqrt_nes = NULL,
+           **cor_matrices = NULL;
+    inv_cor_hash_t *inv_cor_hashes = NULL;
+    if (overlap) {
+        overlap_ws = (double **)malloc(n_smpl * sizeof(double *));
+        overlap_zs = (double **)malloc(n_smpl * sizeof(double *));
+        overlap_afs = (double **)malloc(n_smpl * sizeof(double *));
+        overlap_sqrt_nes = (double **)malloc(n_smpl * sizeof(double *));
+        cor_matrices = (double **)malloc(n_smpl * sizeof(double *));
+        inv_cor_hashes = (inv_cor_hash_t *)malloc(n_smpl * sizeof(inv_cor_hash_t));
+        for (i = 0; i < n_smpl; i++) {
+            overlap_ws[i] = (double *)calloc(i2n[i], sizeof(double));
+            overlap_zs[i] = (double *)calloc(i2n[i], sizeof(double));
+            overlap_afs[i] = (double *)calloc(i2n[i], sizeof(double));
+            overlap_sqrt_nes[i] = (double *)calloc(i2n[i], sizeof(double));
+            cor_matrices[i] = (double *)calloc(i2n[i] * i2n[i], sizeof(double));
+            inv_cor_hash_init(&inv_cor_hashes[i], i2n[i]);
+        }
+    }
 
     char wmode[8];
     set_wmode(wmode, output_type, output_fname, clevel);
@@ -689,138 +962,227 @@ int run(int argc, char **argv) {
     for (i = 0; i < n_files * n_smpl; i++) esd_arr[i] = bcf_str_vector_end;
     bcf1_t *out_line = bcf_init();
     bcf_float_set_missing(out_line->qual);
-    while (bcf_sr_next_line(sr)) {
-        if (filters) {
-            int pass = 0;
-            for (j = 0; j < n_files; j++) {
-                if (!bcf_sr_has_line(sr, j)) continue;
-                bcf1_t *line = bcf_sr_get_line(sr, j);
-                hdr = bcf_sr_get_header(sr, j);
-                passes[j] = filter_test_with_logic(filters[j], line, &smpl_passes[j], filter_logic);
-                if (passes[j]) pass = 1;
+    for (iter = 0; iter < 2; iter++) {
+        while (bcf_sr_next_line(sr)) {
+            if (filters) {
+                int pass = 0;
+                for (j = 0; j < n_files; j++) {
+                    if (!bcf_sr_has_line(sr, j)) continue;
+                    bcf1_t *line = bcf_sr_get_line(sr, j);
+                    hdr = bcf_sr_get_header(sr, j);
+                    passes[j] = filter_test_with_logic(filters[j], line, &smpl_passes[j], filter_logic);
+                    if (passes[j]) pass = 1;
+                }
+                if (!pass) continue; // skip the line for all input VCFs
             }
-            if (!pass) continue; // skip the line for all input VCFs
-        }
 
-        for (i = 0; i < SIZE * n_smpl; i++) bcf_float_set_missing(val_arr[i]);
+            for (i = 0; i < SIZE * n_smpl; i++) bcf_float_set_missing(val_arr[i]);
 
-        for (i = 0; i < n_smpl; i++) {
-            double xnum = 0.0;
-            double xden = 0.0;
-            double ns_sum = 0.0;
-            double nc_sum = 0.0;
-            double af_sum = 0.0;
-            double ac_sum = 0.0;
-            double ne_sum = 0.0;
-            double cq_sum = 0.0;
-            int fill_line = 0;
-            int df = -1;
-            bcf_update_id(NULL, out_line, NULL);
-            bcf_update_filter(out_hdr, out_line, NULL, 0);
-            for (k = 0; k < i2n[i]; k++) {
-                esd_arr[n_files * i + k] = '?';
-                int j = i_k2j[i][k];
-                if (!bcf_sr_has_line(sr, j)) continue;
-                bcf1_t *line = bcf_sr_get_line(sr, j);
-                hdr = bcf_sr_get_header(sr, j);
-                if (!fill_line) {
-                    const char *name = bcf_hdr_id2name(hdr, line->rid);
-                    out_line->rid = bcf_hdr_name2id(out_hdr, name);
-                    out_line->pos = line->pos;
-                    bcf_update_alleles(out_hdr, out_line, (const char **)line->d.allele, line->n_allele);
-                    fill_line = 1;
-                }
-                int l = i_k2l[i][k];
-                if (filters && (!passes[j] || (smpl_passes[j] && !smpl_passes[j][l])))
-                    continue; // skip the line for one input VCF
-
-                double val[SIZE]; // set all values to NAN
-                for (idx = 0; idx < SIZE; idx++) {
-                    bcf_fmt_t *fmt = bcf_get_fmt_id(line, id[j * SIZE + idx]);
-                    if (fmt && !bcf_float_is_missing(((float *)fmt->p)[l])
-                        && !bcf_float_is_vector_end(((float *)fmt->p)[l]))
-                        val[idx] = (double)((float *)fmt->p)[l];
-                    else
-                        val[idx] = NAN;
-                }
-
-                if (esd) {
-                    int effect = szw ? EZ : ES;
-                    if (!isnan(val[effect]))
-                        esd_arr[n_files * i + k] = val[effect] == 0.0 ? '0' : (val[effect] > 0.0 ? '+' : '-');
-                }
-
-                if (isnan(val[NE]) && !isnan(val[NS])) {
-                    // compute effective sample size for binary traits
-                    val[NE] = isnan(val[NC]) ? val[NS] : 4.0 * (val[NS] - val[NC]) * val[NC] / val[NS];
-                }
-
-                double wt;
-                if (szw) { // sample-size weighted scheme
-                    if (isnan(val[NE])) continue;
-                    wt = val[NE];
-                    if (isnan(val[EZ])) {
-                        if (isnan(val[ES]) || isnan(val[LP])) continue;
-                        val[EZ] = -inv_log_ndist(-val[LP] * M_LN10 - M_LN2);
-                        if (val[ES] < 0) val[EZ] = -val[EZ];
+            for (i = 0; i < n_smpl; i++) {
+                double xnum = 0.0;
+                double xden = 0.0;
+                double ns_sum = 0.0;
+                double nc_sum = 0.0;
+                double af_sum = 0.0;
+                double ac_sum = 0.0;
+                double ne_sum = 0.0;
+                double cq_sum = 0.0;
+                int fill_line = 0;
+                int df = -1;
+                bcf_update_id(NULL, out_line, NULL);
+                bcf_update_filter(out_hdr, out_line, NULL, 0);
+                for (k = 0; k < i2n[i]; k++) {
+                    esd_arr[n_files * i + k] = '?';
+                    if (overlap) overlap_zs[i][k] = NAN;
+                    int j = i_k2j[i][k];
+                    if (!bcf_sr_has_line(sr, j)) continue;
+                    bcf1_t *line = bcf_sr_get_line(sr, j);
+                    hdr = bcf_sr_get_header(sr, j);
+                    if (!fill_line) {
+                        const char *name = bcf_hdr_id2name(hdr, line->rid);
+                        out_line->rid = bcf_hdr_name2id(out_hdr, name);
+                        out_line->pos = line->pos;
+                        bcf_update_alleles(out_hdr, out_line, (const char **)line->d.allele, line->n_allele);
+                        fill_line = 1;
                     }
-                    xnum += val[EZ] * sqrt(wt);
-                    cq_sum += val[EZ] * val[EZ];
+                    int l = i_k2l[i][k];
+                    if (filters && (!passes[j] || (smpl_passes[j] && !smpl_passes[j][l])))
+                        continue; // skip the line for one input VCF
+
+                    double val[SIZE]; // set all values to NAN
+                    for (idx = 0; idx < SIZE; idx++) {
+                        bcf_fmt_t *fmt = bcf_get_fmt_id(line, id[j * SIZE + idx]);
+                        if (fmt && !bcf_float_is_missing(((float *)fmt->p)[l])
+                            && !bcf_float_is_vector_end(((float *)fmt->p)[l]))
+                            val[idx] = (double)((float *)fmt->p)[l];
+                        else
+                            val[idx] = NAN;
+                    }
+
+                    if (isnan(val[NE]) && !isnan(val[NS])) {
+                        // compute effective sample size for binary traits
+                        val[NE] = isnan(val[NC]) ? val[NS] : 4.0 * (val[NS] - val[NC]) * val[NC] / val[NS];
+                    }
+
+                    // TODO simplify this part ... too complicated
+                    double w2;
+                    if (szw) { // sample-size weighted scheme
+                        if (isnan(val[NE])) continue;
+                        df++;
+                        if (isnan(val[EZ])) {
+                            if (isnan(val[ES]) || isnan(val[LP])) continue;
+                            val[EZ] = -inv_log_ndist(-val[LP] * M_LN10 - M_LN2);
+                            if (val[ES] < 0) val[EZ] = -val[EZ];
+                        }
+                        if (overlap) {
+                            overlap_zs[i][k] = val[EZ];
+                            if (!iter) continue;
+                            overlap_ws[i][k] = sqrt(val[NE]);
+                            overlap_afs[i][k] = val[AF];
+                            overlap_sqrt_nes[i][k] = overlap_ws[i][k];
+                            goto end;
+                        }
+                        w2 = val[NE];
+                        xnum += val[EZ] * sqrt(w2);
+                        cq_sum += val[EZ] * val[EZ];
+                    } else { // inverse-variance weighted scheme
+                        if (isnan(val[ES]) || isnan(val[SE])) continue;
+                        df++;
+                        if (overlap) {
+                            overlap_zs[i][k] = val[ES] / val[SE];
+                            if (!iter) continue;
+                            overlap_ws[i][k] = 1.0 / val[SE];
+                            overlap_afs[i][k] = val[AF];
+                            overlap_sqrt_nes[i][k] = sqrt(val[NE]);
+                            goto end;
+                        }
+                        w2 = 1.0 / (val[SE] * val[SE]);
+                        xnum += val[ES] * w2;
+                        cq_sum += val[ES] * val[ES] * w2;
+                    }
+
+                    xden += w2;
+                    ns_sum += val[NS];
+                    nc_sum += val[NC];
+                    af_sum += val[AF] * w2;
+                    ac_sum += val[AC];
+                    ne_sum += val[NE];
+
+                end:
+                    if (esd) {
+                        int effect = szw ? EZ : ES;
+                        if (!isnan(val[effect]))
+                            esd_arr[n_files * i + k] = val[effect] == 0.0 ? '0' : (val[effect] > 0.0 ? '+' : '-');
+                    }
+
+                    if (line->d.id[0] != '.' || line->d.id[1]) bcf_add_id(NULL, out_line, line->d.id);
+                    bcf_unpack(line, BCF_UN_FLT);
+                    for (l = 0; l < line->d.n_flt; l++) {
+                        const char *flt = hdr->id[BCF_DT_ID][line->d.flt[l]].key;
+                        int flt_id = bcf_hdr_id2int(out_hdr, BCF_DT_ID, flt);
+                        bcf_add_filter(out_hdr, out_line, flt_id);
+                    }
+                }
+
+                if (df < 0) continue;
+
+                if (overlap && !iter) { // compute the truncated correlations
+                    for (k = 0; k < i2n[i]; k++) {
+                        if (isnan(overlap_zs[i][k]) || overlap_zs[i][k] < -1 || overlap_zs[i][k] > 1) continue;
+                        for (m = k + 1; m < i2n[i]; m++) {
+                            if (isnan(overlap_zs[i][m]) || overlap_zs[i][m] < -1 || overlap_zs[i][m] > 1) continue;
+                            cor_matrices[i][k * i2n[i] + m] += overlap_zs[i][k] * overlap_zs[i][m];
+                            // the lower triangular part of the matrix includes is used to count the number of entries
+                            cor_matrices[i][m * i2n[i] + k]++;
+                        }
+                    }
+                    // add hash to inv_cor_hash structure
+                    inv_cor_hash_add(&inv_cor_hashes[i], overlap_zs[i]);
+                    continue;
+                }
+
+                if (overlap && iter) { // compute numerator and denominator using the overlap formula
+                    const double *ptr = inv_cor_hash_get_matrix(&inv_cor_hashes[i], overlap_zs[i], cor_matrices[i]);
+                    for (k = 0; k < i2n[i]; k++) {
+                        if (isnan(overlap_zs[i][k])) continue;
+                        for (m = 0; m < i2n[i]; m++) {
+                            if (isnan(overlap_zs[i][m])) continue;
+                            double tmp = overlap_ws[i][m] * (*ptr);
+                            xnum += overlap_zs[i][k] * tmp;
+                            tmp *= overlap_ws[i][k];
+                            xden += tmp;
+                            af_sum += overlap_afs[i][k] * tmp;
+                            ne_sum += overlap_sqrt_nes[i][k] * (*ptr) * overlap_sqrt_nes[i][m];
+                            cq_sum += overlap_zs[i][k] * (*ptr) * overlap_zs[i][m];
+                            ptr++;
+                        }
+                    }
+                    inv_cor_hash_clear(&inv_cor_hashes[i]);
+                }
+
+                if (szw) { // sample-size weighted scheme
+                    val_arr[n_smpl * EZ + i] = (float)xnum / sqrt(xden);
+                    val_arr[n_smpl * NE + i] = (float)xden;
                 } else { // inverse-variance weighted scheme
-                    if (isnan(val[ES]) || isnan(val[SE])) continue;
-                    wt = 1.0 / (val[SE] * val[SE]);
-                    xnum += val[ES] * wt;
-                    cq_sum += val[ES] * val[ES] * wt;
+                    val_arr[n_smpl * ES + i] = (float)(xnum / xden);
+                    val_arr[n_smpl * SE + i] = (float)sqrt(1.0 / xden);
+                }
+                val_arr[n_smpl * LP + i] = (float)((-M_LN2 - log_ndist(fabs(xnum / sqrt(xden)))) / M_LN10);
+                val_arr[n_smpl * NS + i] = (float)ns_sum;
+                val_arr[n_smpl * NC + i] = (float)nc_sum;
+                val_arr[n_smpl * AF + i] = (float)(af_sum / xden);
+                val_arr[n_smpl * AC + i] = (float)ac_sum;
+                val_arr[n_smpl * NE + i] = (float)ne_sum;
+
+                if (het && df) { // Cochran's Q test
+                    cq_sum -= xnum * xnum / xden;
+                    val_arr[n_smpl * I2 + i] =
+                        (float)(cq_sum < (double)df ? 0.0 : (cq_sum - (double)df) / cq_sum * 100.0);
+                    val_arr[n_smpl * CQ + i] = (float)(-log_chidist(cq_sum, (double)df) / M_LN10);
                 }
 
-                xden += wt;
-                ns_sum += val[NS];
-                nc_sum += val[NC];
-                af_sum += val[AF] * wt;
-                ac_sum += val[AC];
-                ne_sum += val[NE];
-
-                if (line->d.id[0] != '.' || line->d.id[1]) bcf_add_id(NULL, out_line, line->d.id);
-                bcf_unpack(line, BCF_UN_FLT);
-                for (l = 0; l < line->d.n_flt; l++) {
-                    const char *flt = hdr->id[BCF_DT_ID][line->d.flt[l]].key;
-                    int flt_id = bcf_hdr_id2int(out_hdr, BCF_DT_ID, flt);
-                    bcf_add_filter(out_hdr, out_line, flt_id);
-                }
-                df++;
+                for (idx = 0; idx < SIZE; idx++)
+                    if (isnan(val_arr[n_smpl * idx + i])) bcf_float_set_missing(val_arr[n_smpl * idx + i]);
             }
 
-            if (df < 0) continue;
-            if (szw) { // sample-size weighted scheme
-                val_arr[n_smpl * EZ + i] = (float)xnum / sqrt(xden);
-                val_arr[n_smpl * NE + i] = (float)xden;
-            } else { // inverse-variance weighted scheme
-                val_arr[n_smpl * ES + i] = (float)(xnum / xden);
-                val_arr[n_smpl * SE + i] = (float)sqrt(1.0 / xden);
-            }
-            val_arr[n_smpl * LP + i] = (float)((-M_LN2 - log_ndist(fabs(xnum / sqrt(xden)))) / M_LN10);
-            val_arr[n_smpl * NS + i] = (float)ns_sum;
-            val_arr[n_smpl * NC + i] = (float)nc_sum;
-            val_arr[n_smpl * AF + i] = (float)(af_sum / xden);
-            val_arr[n_smpl * AC + i] = (float)ac_sum;
-            val_arr[n_smpl * NE + i] = (float)ne_sum;
-
-            if (het && df) { // Cochran's Q test
-                cq_sum -= xnum * xnum / xden;
-                val_arr[n_smpl * I2 + i] = (float)(cq_sum < (double)df ? 0.0 : (cq_sum - (double)df) / cq_sum * 100.0);
-                val_arr[n_smpl * CQ + i] = (float)(-log_chidist(cq_sum, (double)df) / M_LN10);
-            }
+            if (overlap && !iter) continue;
 
             for (idx = 0; idx < SIZE; idx++)
-                if (isnan(val_arr[n_smpl * idx + i])) bcf_float_set_missing(val_arr[n_smpl * idx + i]);
+                if (output[idx])
+                    bcf_update_format_float(out_hdr, out_line, id_str[idx], &val_arr[n_smpl * idx], n_smpl);
+            if (esd) bcf_update_format_char(out_hdr, out_line, id_str[SIZE], esd_arr, n_files * n_smpl);
+            if (bcf_write(out_fh, out_hdr, out_line) < 0) error("Unable to write to output VCF file\n");
         }
 
-        for (idx = 0; idx < SIZE; idx++)
-            if (output[idx]) bcf_update_format_float(out_hdr, out_line, id_str[idx], &val_arr[n_smpl * idx], n_smpl);
-        if (esd) bcf_update_format_char(out_hdr, out_line, id_str[SIZE], esd_arr, n_files * n_smpl);
-        if (bcf_write(out_fh, out_hdr, out_line) < 0) error("Unable to write to output VCF file\n");
+        if (!overlap || iter) break;
+
+        // compute weights for each study
+        for (i = 0; i < n_smpl; i++) {
+            inv_cor_hash_alloc(&inv_cor_hashes[i]);
+            for (k = 0; k < i2n[i]; k++) {
+                cor_matrices[i][k * i2n[i] + k] = 1.0;
+                for (m = k + 1; m < i2n[i]; m++) {
+                    double rho = trunc_rho2rho(cor_matrices[i][k * i2n[i] + m] / cor_matrices[i][m * i2n[i] + k]);
+                    // if you force rho to be 0.0 here, then sample overlap correction should do nothing
+                    cor_matrices[i][k * i2n[i] + m] = rho;
+                    cor_matrices[i][m * i2n[i] + k] = rho;
+                }
+            }
+            if (print_corr) {
+                fprintf(stderr, "%s correlation matrix\n", out_hdr->samples[i]);
+                for (k = 0; k < i2n[i]; k++) {
+                    for (m = 0; m < i2n[i]; m++) fprintf(stderr, "%.4f\t", cor_matrices[i][k * i2n[i] + m]);
+                    fprintf(stderr, "\n");
+                }
+                fprintf(stderr, "%d inverse correlation matri%s will be computed\n", inv_cor_hashes[i].n_counter,
+                        inv_cor_hashes[i].n_counter == 1 ? "x" : "ces");
+            }
+        }
+        // rewind the VCF readers to the beginning once the weights have been computed
+        bcf_sr_seek(sr, NULL, 0);
     }
 
+    // clean up allocated memory
     free(val_arr);
     free(esd_arr);
     free(id);
@@ -836,6 +1198,22 @@ int run(int argc, char **argv) {
     if (filters) {
         for (j = 0; j < n_files; j++) filter_destroy(filters[j]);
         free(filters);
+    }
+    if (overlap) {
+        for (i = 0; i < n_smpl; i++) {
+            free(overlap_ws[i]);
+            free(overlap_zs[i]);
+            free(overlap_afs[i]);
+            free(overlap_sqrt_nes[i]);
+            free(cor_matrices[i]);
+            inv_cor_hash_destroy(&inv_cor_hashes[i]);
+        }
+        free(overlap_ws);
+        free(overlap_zs);
+        free(overlap_afs);
+        free(overlap_sqrt_nes);
+        free(cor_matrices);
+        free(inv_cor_hashes);
     }
     if (pathname) {
         for (j = 0; j < n_files; j++) free(filenames[j]);

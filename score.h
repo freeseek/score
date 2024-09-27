@@ -26,7 +26,7 @@
 
 #include "tsv2vcf.h"
 
-// see https://github.com/neurogenomics/MungeSumstats#future-enhancements
+// see http://github.com/neurogenomics/MungeSumstats#future-enhancements
 #define HDR_SNP 0
 #define HDR_BP 1
 #define HDR_CHR 2
@@ -61,38 +61,43 @@ typedef struct {
     int hdr_num;
 } mapping_t;
 
-// see https://www.cog-genomics.org/plink/1.9/formats#assoc
+// see http://www.cog-genomics.org/plink/1.9/formats#assoc
 static mapping_t plink_mapping[] = {{"SNP", HDR_SNP},   {"BP", HDR_BP},   {"CHR", HDR_CHR}, {"A1", HDR_A1},
                                     {"A2", HDR_A2},     {"P", HDR_P},     {"OR", HDR_OR},   {"BETA", HDR_BETA},
                                     {"INFO", HDR_INFO}, {"F_U", HDR_FRQ}, {"FRQ", HDR_FRQ}, {"SE", HDR_SE}};
 
-// see https://www.cog-genomics.org/plink/2.0/formats#glm_logistic
+// see http://www.cog-genomics.org/plink/2.0/formats#glm_logistic
 static mapping_t plink2_mapping[] = {
     {"ID", HDR_SNP},      {"POS", HDR_BP},   {"CHROM", HDR_CHR},     {"A1", HDR_A1},     {"AX", HDR_A2},
     {"P", HDR_P},         {"Z_STAT", HDR_Z}, {"OR", HDR_OR},         {"BETA", HDR_BETA}, {"MACH_R2", HDR_INFO},
     {"A1_FREQ", HDR_FRQ}, {"SE", HDR_SE},    {"LOG(OR)_SE", HDR_SE}, {"LOG10_P", HDR_LP}};
 
-// see print_header_output_single() in https://github.com/rgcgithub/regenie/blob/master/src/Step2_Models.cpp
+// see print_header_output_single() in http://github.com/rgcgithub/regenie/blob/master/src/Step2_Models.cpp
 static mapping_t regenie_mapping[] = {
     {"ID", HDR_SNP},     {"GENPOS", HDR_BP},     {"CHROM", HDR_CHR},        {"ALLELE1", HDR_A1},   {"BETA", HDR_BETA},
     {"N", HDR_N},        {"N_CASES", HDR_N_CAS}, {"N_CONTROLS", HDR_N_CON}, {"INFO", HDR_INFO},    {"A1FREQ", HDR_FRQ},
     {"ALLELE0", HDR_A0}, {"SE", HDR_SE},         {"LOG10P", HDR_LP},        {"AC_ALLELE1", HDR_AC}};
 
-// see https://saigegit.github.io/SAIGE-doc/docs/single_step2.html#output-file
-// see https://github.com/saigegit/SAIGE/blob/main/src/Main.cpp
+// see http://saigegit.github.io/SAIGE-doc/docs/single_step2.html#output-file
+// see http://github.com/saigegit/SAIGE/blob/main/src/Main.cpp
 static mapping_t saige_mapping[] = {{"SNPID", HDR_SNP},      {"markerID", HDR_SNP}, {"POS", HDR_BP},
                                     {"CHR", HDR_CHR},        {"Allele2", HDR_A1},   {"Allele1", HDR_A2},
                                     {"p.value", HDR_P},      {"BETA", HDR_BETA},    {"N", HDR_N},
                                     {"N_case", HDR_N_CAS},   {"N_ctrl", HDR_N_CON}, {"imputationInfo", HDR_INFO},
                                     {"AF_Allele2", HDR_FRQ}, {"SE", HDR_SE},        {"AC_Allele2", HDR_AC}};
 
-// see https://alkesgroup.broadinstitute.org/BOLT-LMM/BOLT-LMM_manual.html#x1-490009.1
+// see http://alkesgroup.broadinstitute.org/BOLT-LMM/BOLT-LMM_manual.html#x1-490009.1
 static mapping_t bolt_mapping[] = {{"SNP", HDR_SNP},      {"BP", HDR_BP},      {"CHR", HDR_CHR},
                                    {"ALLELE1", HDR_A1},   {"P_LINREG", HDR_P}, {"P_BOLT_LMM_INF", HDR_P},
                                    {"P_BOLT_LMM", HDR_P}, {"BETA", HDR_BETA},  {"A1FREQ", HDR_FRQ},
                                    {"ALLELE0", HDR_A0},   {"SE", HDR_SE}};
 
-// see Analyze() in https://github.com/statgen/METAL/blob/master/metal/Main.cpp
+// static mapping_t genesis_mapping[] = {{"rsid", HDR_SNP}, {"pos", HDR_BP}, {"chr", HDR_CHR},
+//                                       {"alt", HDR_A1}, {"P", HDR_P}, {"Z", HDR_Z},
+//                                       {"Est", HDR_BETA}, {"n.obs", HDR_N}, {"eff.frq", HDR_FRQ},
+//                                       {"ref", HDR_A0}, {"Est.SE", HDR_SE}};
+
+// see Analyze() in http://github.com/statgen/METAL/blob/master/metal/Main.cpp
 static mapping_t metal_mapping[] = {{"MarkerName", HDR_SNP}, {"Position", HDR_BP},   {"Chromosome", HDR_CHR},
                                     {"Allele1", HDR_A1},     {"Allele2", HDR_A2},    {"P-value", HDR_P},
                                     {"Zscore", HDR_Z},       {"Effect", HDR_BETA},   {"N", HDR_N},
@@ -100,7 +105,7 @@ static mapping_t metal_mapping[] = {{"MarkerName", HDR_SNP}, {"Position", HDR_BP
                                     {"Weight", HDR_NEFF},    {"HetISq", HDR_HET_I2}, {"HetPVal", HDR_HET_P},
                                     {"logHetP", HDR_HET_LP}, {"Direction", HDR_DIRE}};
 
-// see https://www.pgscatalog.org/downloads/
+// see http://www.pgscatalog.org/downloads/
 static const mapping_t pgs_mapping[] = {{"chr_name", HDR_CHR},
                                         {"chr_position", HDR_BP},
                                         {"rsID", HDR_SNP},

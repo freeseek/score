@@ -36,7 +36,7 @@
 #include "filter.h"
 #include "score.h"
 
-#define SCORE_VERSION "2024-05-05"
+#define SCORE_VERSION "2024-09-27"
 
 #define FLT_INCLUDE (1 << 0)
 #define FLT_EXCLUDE (1 << 1)
@@ -399,7 +399,7 @@ const char *about(void) { return "Compute polygenic scores from GWAS-VCF summary
 static const char *usage_text(void) {
     return "\n"
            "About: Compute polygenic scores from GWAS-VCF summary statistics. (version " SCORE_VERSION
-           " https://github.com/freeseek/score)\n"
+           " http://github.com/freeseek/score)\n"
            "\n"
            "Usage: bcftools +score [options] <in.vcf.gz> [<score1.gwas.vcf.gz> <score2.gwas.vcf.gz> ...]\n"
            "Plugin options:\n"
@@ -826,15 +826,12 @@ int run(int argc, char **argv) {
         }
 
         int skip_line = 1;
-        if (!(flags & TSV_MODE)) {
-            for (i = 0; i < n_files; i++) {
-                if (!bcf_sr_has_line(sr, i + 1)) continue;
-                n_matched[i]++;
+        for (i = 0; i < n_prs; i++) {
+            if (!(flags & TSV_MODE)) {
+                if (!bcf_sr_has_line(sr, prs2vcf[i])) continue;
                 skip_line = 0;
-            }
-        } else {
-            memset((void *)idxs, -1, n_prs * sizeof(int));
-            for (i = 0; i < n_prs; i++) {
+            } else {
+                idxs[i] = -1;
                 if (summaries[i]->use_snp) {
                     if (khash_str2int_get(summaries[i]->id2idx, line->d.id, &idxs[i]) < 0) continue;
                 } else {
@@ -843,7 +840,6 @@ int run(int argc, char **argv) {
                     if (k == kh_end(hash)) continue;
                     idxs[i] = kh_val(hash, k);
                 }
-                n_matched[i]++;
                 skip_line = 0;
             }
         }
@@ -1045,6 +1041,7 @@ int run(int argc, char **argv) {
             for (idx_allele = 0; idx_allele < line->n_allele; idx_allele++)
                 if (strcmp(a1, line->d.allele[idx_allele]) == 0) break;
             if (idx_allele == line->n_allele) continue;
+            n_matched[i]++;
             for (j = 0; j < n_q_score_thr; j++) {
                 if (q_score_thr && lp < q_score_thr[j]) continue;
                 float *ptr = scores + (i * n_q_score_thr + j) * n_smpls;

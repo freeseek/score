@@ -27,7 +27,7 @@
 
 options(error = function() {traceback(3); q()})
 
-assoc_plot_version <- '2024-05-05'
+assoc_plot_version <- '2024-09-27'
 
 suppressPackageStartupMessages(library(optparse))
 suppressPackageStartupMessages(library(data.table))
@@ -58,7 +58,7 @@ parser <- add_option(parser, c('--fontsize'), type = 'integer', default = 12, he
 
 args <- parse_args(parser, commandArgs(trailingOnly = TRUE), convert_hyphens_to_underscores = TRUE)
 
-write(paste('assoc_plot.R', assoc_plot_version, 'https://github.com/freeseek/score'), stderr())
+write(paste('assoc_plot.R', assoc_plot_version, 'http://github.com/freeseek/score'), stderr())
 
 if (is.null(args$genome) && is.null(args$cytoband)) {print_help(parser); stop('either --genome or --cytoband is required\nTo download the cytoband file run:\nwget http://hgdownload.cse.ucsc.edu/goldenPath/hg38/database/cytoBand.txt.gz')}
 if (!is.null(args$genome) && !is.null(args$cytoband)) {print_help(parser); stop('cannot use --genome and --cytoband at the same time')}
@@ -192,7 +192,7 @@ if (!is.null(args$max_height)) {
   max_height <- max(df$lp[!is.infinite(df$lp)], -log10(5e-8), na.rm = TRUE)
 }
 
-# see https://github.com/FINNGEN/saige-pipelines/blob/master/scripts/qqplot.R
+# see http://github.com/FINNGEN/saige-pipelines/blob/master/scripts/qqplot.R
 max_loglog <- args$loglog_pval * log10(max_height) / log10(args$loglog_pval)
 df$lp[df$lp > args$loglog & !is.na(df$lp)] = args$loglog_pval * log10(df$lp[df$lp > args$loglog_pval & !is.na(df$lp)]) / log10(args$loglog_pval)
 tick_pos <- round(seq(1, max_loglog, length.out = 10))

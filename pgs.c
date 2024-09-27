@@ -37,14 +37,14 @@
 #include "filter.h"
 #include "cholmod.h"
 
-#define PGS_VERSION "2024-05-05"
+#define PGS_VERSION "2024-09-27"
 
 #define AVERAGE_LD_SCORE_DFLT 72.6
 #define EXPECTED_RATIO_DFLT 0.6
 #define MEDIAN_CHISQ 0.45493642311957283031 // qchisq(.5,1)
 
 // this plugin is based on cholmod_updown whose documentation can be found at:
-// https://github.com/DrTimothyAldenDavis/SuiteSparse/blob/dev/CHOLMOD/Modify/cholmod_updown.c
+// http://github.com/DrTimothyAldenDavis/SuiteSparse/blob/dev/CHOLMOD/Modify/cholmod_updown.c
 
 // cholmod_analyze has time complexity O(nnz(A))
 // cholmod_factor has time complexity O(nnz(L))
@@ -77,7 +77,7 @@ typedef struct {
 #define FLT_INCLUDE 1
 #define FLT_EXCLUDE 2
 
-// https://github.com/MRCIEU/gwas-vcf-specification
+// http://github.com/MRCIEU/gwas-vcf-specification
 #define NS 0
 #define EZ 1
 #define NC 2
@@ -107,9 +107,9 @@ static const char *desc_str[SIZE] = {
 #define M_2PI 6.283185307179586476925286766559 /* 2*pi */
 
 // Wichura, M. J. Algorithm AS 241: The Percentage Points of the Normal Distribution. Applied Statistics 37, 477 (1988).
-// https://doi.org/10.2307/2347330 PPND16 function (algorithm AS241) http://lib.stat.cmu.edu/apstat/241
-// see qnorm5() in https://github.com/wch/r-source/blob/trunk/src/nmath/qnorm.c
-// see ninv() in https://github.com/statgen/METAL/blob/master/libsrc/MathStats.cpp
+// http://doi.org/10.2307/2347330 PPND16 function (algorithm AS241) http://lib.stat.cmu.edu/apstat/241
+// see qnorm5() in http://github.com/wch/r-source/blob/trunk/src/nmath/qnorm.c
+// see ninv() in http://github.com/statgen/METAL/blob/master/libsrc/MathStats.cpp
 // this function is equivalent to qnorm(log_p, log.p = TRUE)
 static double inv_log_ndist(double log_p) {
     const double a0 = 3.3871328727963666080E0;
@@ -230,7 +230,7 @@ double get_median2(const double *v, int n, int shift) {
  ****************************************/
 
 // A sparse matrix in COOrdinate format
-// see https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.coo_matrix.html
+// see http://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.coo_matrix.html
 typedef struct {
     int i;
     int j;
@@ -247,7 +247,7 @@ typedef struct {
 } coo_matrix_t;
 
 // Compressed Sparse Row matrix structure
-// see https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.csr_matrix.html
+// see http://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.csr_matrix.html
 typedef struct {
     int nrow;  // number of rows
     double *d; // elements on the diagonal
@@ -288,7 +288,7 @@ static inline void append_nnz(int i, int j, double x, coo_matrix_t *coo) {
     cell->x = x;
 }
 
-// see https://github.com/rgl-epfl/cholespy/blob/main/src/cholesky_solver.cpp
+// see http://github.com/rgl-epfl/cholespy/blob/main/src/cholesky_solver.cpp
 static inline void coo_to_csr(const coo_matrix_t *coo, csr_matrix_t *csr) {
     int k;
     csr->nrow = coo->nrow;
@@ -366,10 +366,10 @@ static inline double dot(const double *x, const double *y, int n) {
 }
 
 // conjugate gradient method with Jacobi preconditioner
-// https://en.wikipedia.org/wiki/Conjugate_gradient_method#Example_code_in_MATLAB_/_GNU_Octave
-// https://en.wikipedia.org/wiki/Preconditioner#Jacobi_(or_diagonal)_preconditioner
-// https://en.wikipedia.org/wiki/Conjugate_gradient_method#The_preconditioned_conjugate_gradient_method
-// alternative approach to https://github.com/awohns/ldgm/blob/main/MATLAB/precisionDivide.m
+// http://en.wikipedia.org/wiki/Conjugate_gradient_method#Example_code_in_MATLAB_/_GNU_Octave
+// http://en.wikipedia.org/wiki/Preconditioner#Jacobi_(or_diagonal)_preconditioner
+// http://en.wikipedia.org/wiki/Conjugate_gradient_method#The_preconditioned_conjugate_gradient_method
+// alternative approach to http://github.com/awohns/ldgm/blob/main/MATLAB/precisionDivide.m
 static int pcg(const csr_matrix_t *A, double *x, double tol, int jacobi) {
     int i, iter, n = A->nrow;
     double rsold, rsnew, tol2 = tol * tol;
@@ -405,9 +405,9 @@ static int pcg(const csr_matrix_t *A, double *x, double tol, int jacobi) {
     return iter;
 }
 
-// see https://github.com/awohns/ldgm/blob/main/MATLAB/precisionMultiply.m
+// see http://github.com/awohns/ldgm/blob/main/MATLAB/precisionMultiply.m
 // computes x = (P/P00)y where P = [P00, P01; P10, P11] and P/P00 is the Schur complement
-// https://en.wikipedia.org/wiki/Schur_complement
+// http://en.wikipedia.org/wiki/Schur_complement
 static int precision_multiply(csr_matrix_t schur[][2], const double *y1, double tol, int jacobi, double *x1) {
     int n0 = schur[0][0].nrow;
     int n1 = schur[1][1].nrow;
@@ -513,7 +513,12 @@ static void bcf_remove_format(bcf1_t *line) {
 // use EZ if available
 // use ES/SE if available
 // use -qnorm(10^-LP/2) * sign(ES) if available
-static inline void check_gwas(bcf_hdr_t *hdr) {
+// verify the GWAS-VCF file has sufficient information to compute the effective population size:
+// use --sample-sizes if available
+// use NE if available
+// use NS/NC if available
+// use NS if available
+static inline void check_gwas(bcf_hdr_t *hdr, int n_sample_sizes) {
     int idx, id[SIZE];
     for (idx = 0; idx < SIZE; idx++) {
         id[idx] = bcf_hdr_id2int(hdr, BCF_DT_ID, id_str[idx]);
@@ -523,6 +528,10 @@ static inline void check_gwas(bcf_hdr_t *hdr) {
         error(
             "Error: Either the FORMAT field EZ, or ES and SE, or ES and LP must be defined in the header of the "
             "GWAS-VCF summary statistics file\n");
+    if (!n_sample_sizes && id[NE] < 0 && id[NS] < 0)
+        error(
+            "Error: Either the FORMAT field NE or NS must be defined in the header of the GWAS-VCF summary statistics "
+            "file\nor else effective sample sizes must be input with the --sample-sizes option\n");
 }
 
 // verify a LDGM-VCF file header is compliant
@@ -957,7 +966,7 @@ static void write_ld_block(htsFile *fh, bcf_hdr_t *hdr, line_t *lines, int n_lin
 
 // this function converts a coo_matrix_t structure into a cholmod_sparse matrix structure
 // it does so without using cholmod_allocate_triplet()/cholmod_triplet_to_sparse() or cholmod_allocate_sparse()
-// see https://github.com/rgl-epfl/cholespy/blob/main/src/cholesky_solver.cpp
+// see http://github.com/rgl-epfl/cholespy/blob/main/src/cholesky_solver.cpp
 static void coo_to_cholmod_sparse(const coo_matrix_t *coo, cholmod_sparse *A) {
     assert(A->nzmax >= coo->nrow + coo->nnz); // make sure enough memory was allocated
     assert(A->packed);                        // make sure the matrix is packed
@@ -1092,7 +1101,7 @@ static void cholmod_factor_updown(const double *sd_arr, const int *ind2row, int 
     for (k = 0; k < C->ncol; k++) C_colptr[k + 1] += C_colptr[k];
 }
 
-// see https://github.com/DrTimothyAldenDavis/SuiteSparse/blob/dev/CHOLMOD/Modify/cholmod_updown.c
+// see http://github.com/DrTimothyAldenDavis/SuiteSparse/blob/dev/CHOLMOD/Modify/cholmod_updown.c
 static void cholmod_update(int update, cholmod_factor *L, cholmod_factor *L2, cholmod_sparse *S, cholmod_sparse *PC,
                            cholmod_dense *y, cholmod_dense *Px, cholmod_dense *x, cholmod_dense *Pb,
                            cholmod_dense *beta_pred, cholmod_dense *alpha_pred, cholmod_dense **Y_Handle,
@@ -1146,8 +1155,8 @@ static inline double log_bf(double sd, double e, double n, double c, double s2) 
 // sqrt(1/det(I + n S)) exp(-1/2 n e (inv(I + n S) - I) e')
 // where S = s2 D ((1-c) I + c P) D
 // to compute |I + n S| and inv(I + n S) we use the following specific cases of the lemma and formula:
-// https://en.wikipedia.org/wiki/Matrix_determinant_lemma
-// https://en.wikipedia.org/wiki/Sherman%E2%80%93Morrison_formula
+// http://en.wikipedia.org/wiki/Matrix_determinant_lemma
+// http://en.wikipedia.org/wiki/Sherman%E2%80%93Morrison_formula
 // where A is a diagonal matrix and uv'=P is the constant matrix
 // notice that ePe' is equal to sum(e)^2
 // A = inv(D) inv(D) + n s2 (1-c) I
@@ -1320,7 +1329,7 @@ static double gibbs(int nrow, const map_t *map, const double *sd_arr, const doub
         ((double *)Pb->x)[i] = beta_hat[((int *)L->Perm)[i]]; // cholmod_solve(CHOLMOD_P)
     }
 
-    // https://stackoverflow.com/questions/33978589/any-example-of-cholmod-updown-solve-updating-in-cholmod
+    // http://stackoverflow.com/questions/33978589/any-example-of-cholmod-updown-solve-updating-in-cholmod
     if (L->is_super || L->is_ll) {
         cholmod_change_factor(CHOLMOD_REAL, 0, 0, 0, 0, L, cm);
         assert(cm->status == CHOLMOD_OK);
@@ -1905,8 +1914,7 @@ int run(int argc, char **argv) {
             if (*tmp) error("Could not parse: --threads %s\n", optarg);
             break;
         case 'W':
-            if (!(write_index = write_index_parse(optarg)))
-                error("Unsupported index format '%s'\n", optarg);
+            if (!(write_index = write_index_parse(optarg))) error("Unsupported index format '%s'\n", optarg);
             break;
         case 7:
             stats_only = 1;
@@ -1990,7 +1998,7 @@ int run(int argc, char **argv) {
         case 'h':
         case '?':
         default:
-            fprintf(log_file, "PGS " PGS_VERSION " https://github.com/freeseek/score BCFtools %s HTSlib %s\n",
+            fprintf(log_file, "PGS " PGS_VERSION " http://github.com/freeseek/score BCFtools %s HTSlib %s\n",
                     bcftools_version(), hts_version());
             fprintf(log_file, "CHOLMOD %d.%d.%d SuiteSparse %d.%d.%d compiled for %s\n", cholmod_ver[0], cholmod_ver[1],
                     cholmod_ver[2], suitesparse_ver[0], suitesparse_ver[1], suitesparse_ver[2], blas_library);
@@ -1999,7 +2007,7 @@ int run(int argc, char **argv) {
         }
     }
 
-    fprintf(log_file, "PGS " PGS_VERSION " https://github.com/freeseek/score BCFtools %s HTSlib %s\n",
+    fprintf(log_file, "PGS " PGS_VERSION " http://github.com/freeseek/score BCFtools %s HTSlib %s\n",
             bcftools_version(), hts_version());
     fprintf(log_file, "CHOLMOD %d.%d.%d SuiteSparse %d.%d.%d compiled for %s\n", cholmod_ver[0], cholmod_ver[1],
             cholmod_ver[2], suitesparse_ver[0], suitesparse_ver[1], suitesparse_ver[2], blas_library);
@@ -2042,7 +2050,7 @@ int run(int argc, char **argv) {
 
     if (!bcf_sr_add_reader(sr, argv[optind]))
         error("Error opening GWAS-VCF file %s: %s\n", argv[optind], bcf_sr_strerror(sr->errnum));
-    check_gwas(bcf_sr_get_header(sr, 0));
+    check_gwas(bcf_sr_get_header(sr, 0), n_sample_sizes);
 
     for (i = 0; i < n_files; i++) {
         if (!bcf_sr_add_reader(sr, filenames[i]))
@@ -2055,7 +2063,7 @@ int run(int argc, char **argv) {
         free(filenames);
     }
 
-    fprintf(log_file, "PGS " PGS_VERSION " https://github.com/freeseek/score BCFtools %s HTSlib %s\n",
+    fprintf(log_file, "PGS " PGS_VERSION " http://github.com/freeseek/score BCFtools %s HTSlib %s\n",
             bcftools_version(), hts_version());
     fprintf(log_file, "CHOLMOD %d.%d.%d SuiteSparse %d.%d.%d compiled for %s\n", cholmod_ver[0], cholmod_ver[1],
             cholmod_ver[2], suitesparse_ver[0], suitesparse_ver[1], suitesparse_ver[2], blas_library);
@@ -2219,12 +2227,12 @@ int run(int argc, char **argv) {
     int m_gibbs_weight = 0;
 
     // cholmod structures initialization
-    // see https://github.com/DrTimothyAldenDavis/SuiteSparse/blob/dev/CHOLMOD/Core/cholmod_common.c
+    // see http://github.com/DrTimothyAldenDavis/SuiteSparse/blob/dev/CHOLMOD/Core/cholmod_common.c
     cholmod_common cm;
     cholmod_start(&cm);
     cm.supernodal = factorization;
     cm.supernodal_switch = supernodal_switch;
-    // see https://github.com/DrTimothyAldenDavis/SuiteSparse/blob/dev/CHOLMOD/MATLAB/analyze.m
+    // see http://github.com/DrTimothyAldenDavis/SuiteSparse/blob/dev/CHOLMOD/MATLAB/analyze.m
     if (ordering == -1) {
         /* use AMD only */
         cm.nmethods = 1;
@@ -2271,7 +2279,7 @@ int run(int argc, char **argv) {
     coo_matrix_t coo_A = {0};
     csr_matrix_t schur_P[2][2];
 
-    // see https://github.com/awohns/ldgm/blob/main/MATLAB/BLUPxldgm.m
+    // see http://github.com/awohns/ldgm/blob/main/MATLAB/BLUPxldgm.m
     int ret;
     stats_t stats;
     memset(&stats, 0, sizeof(stats_t));
@@ -2500,7 +2508,7 @@ int run(int argc, char **argv) {
     if (log_file != stdout && log_file != stderr) fclose(log_file);
 
     // this is to avoid segmentation fault due to a problem between dlclose() and OpenMP
-    // see https://stackoverflow.com/questions/69408094
+    // see http://stackoverflow.com/questions/69408094
     usleep(65536);
 
     return 0;

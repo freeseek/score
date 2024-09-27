@@ -33,7 +33,7 @@
 #include "bcftools.h"
 #include "filter.h"
 
-#define BLUP_VERSION "2024-05-05"
+#define BLUP_VERSION "2024-09-27"
 
 #define AVERAGE_LD_SCORE_DFLT 72.6
 #define MEDIAN_CHISQ 0.45493642311957283031 // qchisq(.5,1)
@@ -42,7 +42,7 @@
 #define FLT_INCLUDE 1
 #define FLT_EXCLUDE 2
 
-// https://github.com/MRCIEU/gwas-vcf-specification
+// http://github.com/MRCIEU/gwas-vcf-specification
 #define NS 0
 #define EZ 1
 #define NC 2
@@ -70,9 +70,9 @@ static const char *desc_str[SIZE] = {
 #define M_2PI 6.283185307179586476925286766559 /* 2*pi */
 
 // Wichura, M. J. Algorithm AS 241: The Percentage Points of the Normal Distribution. Applied Statistics 37, 477 (1988).
-// https://doi.org/10.2307/2347330 PPND16 function (algorithm AS241) http://lib.stat.cmu.edu/apstat/241
-// see qnorm5() in https://github.com/wch/r-source/blob/trunk/src/nmath/qnorm.c
-// see ninv() in https://github.com/statgen/METAL/blob/master/libsrc/MathStats.cpp
+// http://doi.org/10.2307/2347330 PPND16 function (algorithm AS241) http://lib.stat.cmu.edu/apstat/241
+// see qnorm5() in http://github.com/wch/r-source/blob/trunk/src/nmath/qnorm.c
+// see ninv() in http://github.com/statgen/METAL/blob/master/libsrc/MathStats.cpp
 // this function is equivalent to qnorm(log_p, log.p = TRUE)
 static double inv_log_ndist(double log_p) {
     const double a0 = 3.3871328727963666080E0;
@@ -193,7 +193,7 @@ double get_median2(const double *v, int n, int shift) {
  ****************************************/
 
 // A sparse matrix in COOrdinate format
-// see https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.coo_matrix.html
+// see http://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.coo_matrix.html
 typedef struct {
     int i;
     int j;
@@ -210,7 +210,7 @@ typedef struct {
 } coo_matrix_t;
 
 // Compressed Sparse Row matrix structure
-// see https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.csr_matrix.html
+// see http://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.csr_matrix.html
 typedef struct {
     int nrow;  // number of rows
     double *d; // elements on the diagonal
@@ -251,7 +251,7 @@ static inline void append_nnz(int i, int j, double x, coo_matrix_t *coo) {
     cell->x = x;
 }
 
-// see https://github.com/rgl-epfl/cholespy/blob/main/src/cholesky_solver.cpp
+// see http://github.com/rgl-epfl/cholespy/blob/main/src/cholesky_solver.cpp
 static inline void coo_to_csr(const coo_matrix_t *coo, csr_matrix_t *csr) {
     int k;
     csr->nrow = coo->nrow;
@@ -329,10 +329,10 @@ static inline double dot(const double *x, const double *y, int n) {
 }
 
 // conjugate gradient method with Jacobi preconditioner
-// https://en.wikipedia.org/wiki/Conjugate_gradient_method#Example_code_in_MATLAB_/_GNU_Octave
-// https://en.wikipedia.org/wiki/Preconditioner#Jacobi_(or_diagonal)_preconditioner
-// https://en.wikipedia.org/wiki/Conjugate_gradient_method#The_preconditioned_conjugate_gradient_method
-// alternative approach to https://github.com/awohns/ldgm/blob/main/MATLAB/precisionDivide.m
+// http://en.wikipedia.org/wiki/Conjugate_gradient_method#Example_code_in_MATLAB_/_GNU_Octave
+// http://en.wikipedia.org/wiki/Preconditioner#Jacobi_(or_diagonal)_preconditioner
+// http://en.wikipedia.org/wiki/Conjugate_gradient_method#The_preconditioned_conjugate_gradient_method
+// alternative approach to http://github.com/awohns/ldgm/blob/main/MATLAB/precisionDivide.m
 static int pcg(const csr_matrix_t *A, double *x, double tol, int jacobi) {
     int i, iter, n = A->nrow;
     double rsold, rsnew, tol2 = tol * tol;
@@ -368,9 +368,9 @@ static int pcg(const csr_matrix_t *A, double *x, double tol, int jacobi) {
     return iter;
 }
 
-// see https://github.com/awohns/ldgm/blob/main/MATLAB/precisionMultiply.m
+// see http://github.com/awohns/ldgm/blob/main/MATLAB/precisionMultiply.m
 // computes x = (P/P00)y where P = [P00, P01; P10, P11] and P/P00 is the Schur complement
-// https://en.wikipedia.org/wiki/Schur_complement
+// http://en.wikipedia.org/wiki/Schur_complement
 static int precision_multiply(csr_matrix_t schur[][2], const double *y1, double tol, int jacobi, double *x1) {
     int n0 = schur[0][0].nrow;
     int n1 = schur[1][1].nrow;
@@ -471,7 +471,12 @@ static void bcf_remove_format(bcf1_t *line) {
 // use EZ if available
 // use ES/SE if available
 // use -qnorm(10^-LP/2) * sign(ES) if available
-static inline void check_gwas(bcf_hdr_t *hdr) {
+// verify the GWAS-VCF file has sufficient information to compute the effective population size:
+// use --sample-sizes if available
+// use NE if available
+// use NS/NC if available
+// use NS if available
+static inline void check_gwas(bcf_hdr_t *hdr, int n_sample_sizes) {
     int idx, id[SIZE];
     for (idx = 0; idx < SIZE; idx++) {
         id[idx] = bcf_hdr_id2int(hdr, BCF_DT_ID, id_str[idx]);
@@ -481,6 +486,10 @@ static inline void check_gwas(bcf_hdr_t *hdr) {
         error(
             "Error: Either the FORMAT field EZ, or ES and SE, or ES and LP must be defined in the header of the "
             "GWAS-VCF summary statistics file\n");
+    if (!n_sample_sizes && id[NE] < 0 && id[NS] < 0)
+        error(
+            "Error: Either the FORMAT field NE or NS must be defined in the header of the GWAS-VCF summary statistics "
+            "file\nor else effective sample sizes must be input with the --sample-sizes option\n");
 }
 
 // verify a LDGM-VCF file header is compliant
@@ -887,7 +896,7 @@ static const char *usage_text(void) {
     return "\n"
            "About: Compute best linear unbiased predictor from GWAS-VCF summary statistics.\n"
            "(version " BLUP_VERSION
-           " https://github.com/freeseek/score)\n"
+           " http://github.com/freeseek/score)\n"
            "[ Nowbandegani, P. S., Wohns, A. W., et al. Extremely sparse models of linkage disequilibrium in "
            "ancestrally\n"
            "diverse association studies. Nat Genet, 55, 1494–1502, (2023) http://doi.org/10.1038/s41588-023-01487-8 ]\n"
@@ -1127,8 +1136,7 @@ int run(int argc, char **argv) {
             if (*tmp) error("Could not parse: --threads %s\n", optarg);
             break;
         case 'W':
-            if (!(write_index = write_index_parse(optarg)))
-                error("Unsupported index format '%s'\n", optarg);
+            if (!(write_index = write_index_parse(optarg))) error("Unsupported index format '%s'\n", optarg);
             break;
         case 5:
             stats_only = 1;
@@ -1201,7 +1209,7 @@ int run(int argc, char **argv) {
 
     if (!bcf_sr_add_reader(sr, argv[optind]))
         error("Error opening GWAS-VCF file %s: %s\n", argv[optind], bcf_sr_strerror(sr->errnum));
-    check_gwas(bcf_sr_get_header(sr, 0));
+    check_gwas(bcf_sr_get_header(sr, 0), n_sample_sizes);
 
     for (i = 0; i < n_files; i++) {
         if (!bcf_sr_add_reader(sr, filenames[i]))
@@ -1290,7 +1298,7 @@ int run(int argc, char **argv) {
     double *beta_blup = NULL;
     int m_beta_blup = 0;
 
-    fprintf(log_file, "BLUP " BLUP_VERSION " https://github.com/freeseek/score BCFTOOLS %s HTSLIB %s\n",
+    fprintf(log_file, "BLUP " BLUP_VERSION " http://github.com/freeseek/score BCFTOOLS %s HTSLIB %s\n",
             bcftools_version(), hts_version());
 
     if (!stats_only) {
@@ -1333,7 +1341,7 @@ int run(int argc, char **argv) {
 
     if (!stats_only && verbose) fprintf(log_file, "=== LD_BLOCKS ===\n");
 
-    // see https://github.com/awohns/ldgm/blob/main/MATLAB/BLUPxldgm.m
+    // see http://github.com/awohns/ldgm/blob/main/MATLAB/BLUPxldgm.m
     int ret;
     do {
         n_lines = 0;

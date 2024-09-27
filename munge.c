@@ -35,12 +35,12 @@
 #include "bcftools.h"
 #include "score.h"
 
-#define MUNGE_VERSION "2024-05-05"
+#define MUNGE_VERSION "2024-09-27"
 
 #define IFFY_TAG "IFFY"
 #define MISMATCH_TAG "REF_MISMATCH"
 
-// https://github.com/MRCIEU/gwas-vcf-specification
+// http://github.com/MRCIEU/gwas-vcf-specification
 #define NS 0
 #define EZ 1
 #define SI 2
@@ -158,7 +158,7 @@ static const char *usage_text(void) {
     return "\n"
            "About: Convert summary statistics to GWAS-VCF. "
            "(version " MUNGE_VERSION
-           " https://github.com/freeseek/score)\n"
+           " http://github.com/freeseek/score)\n"
            "\n"
            "Usage: bcftools +munge [options] <score.gwas.ssf.tsv>\n"
            "Plugin options:\n"
@@ -309,8 +309,7 @@ int run(int argc, char **argv) {
             if (*tmp) error("Could not parse: --threads %s\n", optarg);
             break;
         case 'W':
-            if (!(write_index = write_index_parse(optarg)))
-                error("Unsupported index format '%s'\n", optarg);
+            if (!(write_index = write_index_parse(optarg))) error("Unsupported index format '%s'\n", optarg);
             break;
         case 'h':
         case '?':

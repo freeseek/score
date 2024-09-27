@@ -31,12 +31,12 @@
 #include <htslib/kseq.h>
 #include <htslib/vcf.h>
 #include <htslib/faidx.h>
+#include <htslib/khash.h> // required to reset the contigs dictionary and table
 #include "bcftools.h"
-#include "regidx.h"       // cannot use htslib/regdix.h see https://github.com/samtools/htslib/pull/761
-#include "htslib/khash.h" // required to reset the contigs dictionary and table
+#include "regidx.h" // cannot use htslib/regdix.h see http://github.com/samtools/htslib/pull/761
 KHASH_MAP_INIT_STR(vdict, bcf_idinfo_t)
 
-#define LIFTOVER_VERSION "2024-05-05"
+#define LIFTOVER_VERSION "2024-09-27"
 
 #define FLIP_TAG "FLIP"
 #define SWAP_TAG "SWAP"
@@ -59,12 +59,14 @@ const char *rules_str[] = {"DROP", "AC", "AF", "DS", "GT", "FLIP", "AGR"};
 
 static inline char rev_nt(char iupac) {
     static const char iupac_complement[128] = {
-        0,   0,   0,   0,   0,   0,   0,   0, 0,   0,   0,   0,   0,   0, 0, 0,   0,   0,   0,   0,   0,   0,
-        0,   0,   0,   0,   0,   0,   0,   0, 0,   0,   0,   0,   0,   0, 0, 0,   0,   0,   0,   0,   0,   0,
-        0,   '-', 0,   '/', 0,   0,   0,   0, 0,   0,   0,   0,   0,   0, 0, 0,   0,   0,   0,   0,   0,   'T',
-        'V', 'G', 'H', 0,   0,   'C', 'D', 0, 0,   'M', 0,   'K', 'N', 0, 0, 0,   'Y', 'S', 'A', 0,   'B', 'W',
-        0,   'R', 0,   ']', 0,   '[', 0,   0, 0,   'T', 'V', 'G', 'H', 0, 0, 'C', 'D', 0,   0,   'M', 0,   'K',
-        'N', 0,   0,   0,   'Y', 'S', 'A', 0, 'B', 'W', 0,   'R', 0,   0, 0, 0,   0,   0,
+        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
+        0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F,
+        0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2A, 0x2B, 0x2C, '-',  0x2E, '/',
+        0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E, 0x3F,
+        0x40, 'T',  'V',  'G',  'H',  0x45, 0x46, 'C',  'D',  0x49, 0x4A, 'M',  0x4C, 'K',  'N',  0x4F,
+        0x50, 0x51, 'Y',  'S',  'A',  0x55, 'B',  'W',  0x58, 'R',  0x5A, ']',  0x5C, '[',  0x5E, 0x5F,
+        0x60, 't',  'v',  'g',  'h',  0x65, 0x66, 'c',  'd',  0x69, 0x6A, 'm',  0x6C, 'k',  'n',  0x6F,
+        0x70, 0x71, 'y',  's',  'a',  0x75, 'b',  'w',  0x78, 'r',  0x7A, 0x7B, 0x7C, 0x7D, 0x7E, 0x7F,
     };
     return iupac_complement[(int)(iupac & 0x7F)];
 }
@@ -129,6 +131,7 @@ typedef struct {
     bcf_hdr_t *out_hdr;
     faidx_t *src_fai;
     faidx_t *dst_fai;
+    int n_ctgs;
     int n_chains;
     chain_t *chains;
     block_t *blocks;
@@ -145,6 +148,7 @@ typedef struct {
     int write_src;
     int write_fail;
     int write_nw;
+    int reject_filter;
 
     int info_end_id;
     int info_an_id;
@@ -394,7 +398,7 @@ static void find_AGR_tags(const bcf_hdr_t *hdr, int *info_rules, int *fmt_rules)
     for (i = 0; i < 2; i++) {
         int *rules = i == 0 ? info_rules : fmt_rules;
         for (j = 0; j < hdr->n[BCF_DT_ID]; j++) {
-            // https://github.com/samtools/htslib/issues/1538
+            // http://github.com/samtools/htslib/issues/1538
             if (!hdr->id[BCF_DT_ID][j].val || bcf_hdr_id2coltype(hdr, coltypes[i], j) == 0xf) continue;
             int length = bcf_hdr_id2length(hdr, coltypes[i], j);
             if (length == BCF_VL_A || length == BCF_VL_G || length == BCF_VL_R) rules[j] = RULE_AGR;
@@ -490,7 +494,7 @@ const char *usage(void) {
     return "\n"
            "About: Lift over a VCF from one genome build to another. "
            "(version " LIFTOVER_VERSION
-           " https://github.com/freeseek/score)\n"
+           " http://github.com/freeseek/score)\n"
            "[ Genovese, G., et al. BCFtools/liftover: an accurate and comprehensive tool to convert genetic variants\n"
            "across genome assemblies. Bioinformatics 40, Issue 2 (2024) http://doi.org/10.1093/bioinformatics/btae038 "
            "]\n"
@@ -518,6 +522,7 @@ const char *usage(void) {
            "       --write-src                 write the source contig/position/alleles for lifted variants\n"
            "       --write-fail                write whether the 5' and 3' anchors have failed to lift\n"
            "       --write-nw                  write the Needleman-Wunsch alignments when required\n"
+           "       --write-reject              write the reason variants cannot be lifted over\n"
            "\n"
            "Options for how to update INFO/FORMAT records:\n"
            "       --fix-tags                  fix Number type for INFO/AC, INFO/AF, FORMAT/GP, and FORMAT/DS tags\n"
@@ -601,15 +606,16 @@ int init(int argc, char **argv, bcf_hdr_t *in, bcf_hdr_t *out) {
                                        {"write-src", no_argument, NULL, 8},
                                        {"write-fail", no_argument, NULL, 9},
                                        {"write-nw", no_argument, NULL, 10},
-                                       {"fix-tags", no_argument, NULL, 11},
-                                       {"flip-tag", required_argument, NULL, 12},
-                                       {"swap-tag", required_argument, NULL, 13},
-                                       {"drop-tags", required_argument, NULL, 14},
-                                       {"ac-tags", required_argument, NULL, 15},
-                                       {"af-tags", required_argument, NULL, 16},
-                                       {"ds-tags", required_argument, NULL, 17},
-                                       {"gt-tags", required_argument, NULL, 18},
-                                       {"es-tags", required_argument, NULL, 19},
+                                       {"write-reject", no_argument, NULL, 11},
+                                       {"fix-tags", no_argument, NULL, 12},
+                                       {"flip-tag", required_argument, NULL, 13},
+                                       {"swap-tag", required_argument, NULL, 14},
+                                       {"drop-tags", required_argument, NULL, 15},
+                                       {"ac-tags", required_argument, NULL, 16},
+                                       {"af-tags", required_argument, NULL, 17},
+                                       {"ds-tags", required_argument, NULL, 18},
+                                       {"gt-tags", required_argument, NULL, 19},
+                                       {"es-tags", required_argument, NULL, 20},
                                        {NULL, 0, NULL, 0}};
     int c;
     while ((c = getopt_long(argc, argv, "h?s:f:c:O:", loptions, NULL)) >= 0) {
@@ -682,30 +688,33 @@ int init(int argc, char **argv, bcf_hdr_t *in, bcf_hdr_t *out) {
             args->write_nw = 1;
             break;
         case 11:
-            fix_tags = 1;
+            args->reject_filter = 1;
             break;
         case 12:
-            args->flip_tag = optarg;
+            fix_tags = 1;
             break;
         case 13:
-            args->swap_tag = optarg;
+            args->flip_tag = optarg;
             break;
         case 14:
-            drop_tags = optarg;
+            args->swap_tag = optarg;
             break;
         case 15:
-            ac_tags = optarg;
+            drop_tags = optarg;
             break;
         case 16:
-            af_tags = optarg;
+            ac_tags = optarg;
             break;
         case 17:
-            ds_tags = optarg;
+            af_tags = optarg;
             break;
         case 18:
-            gt_tags = optarg;
+            ds_tags = optarg;
             break;
         case 19:
+            gt_tags = optarg;
+            break;
+        case 20:
             es_tags = optarg;
             break;
         case 'h':
@@ -717,6 +726,7 @@ int init(int argc, char **argv, bcf_hdr_t *in, bcf_hdr_t *out) {
     }
 
     if (!in || !out) error("Expected input VCF\n%s", usage());
+    args->n_ctgs = in->n[BCF_DT_CTG];
 
     // load target reference file
     if (src_ref_fname) {
@@ -910,6 +920,31 @@ int init(int argc, char **argv, bcf_hdr_t *in, bcf_hdr_t *out) {
         char wmode[8];
         set_wmode(wmode, output_type, (char *)reject_fname, clevel);
         args->reject_fh = hts_open(reject_fname, hts_bcf_wmode(output_type));
+        if (args->reject_filter) {
+            if (bcf_hdr_printf(args->in_hdr,
+                               "##FILTER=<ID=MissingContig,Description=\"Contig not defined in the header\">")
+                < 0)
+                error_errno("Failed to add \"MissingContig\" FILTER header");
+            if (bcf_hdr_printf(args->in_hdr, "##FILTER=<ID=UnmappedAnchors,Description=\"Anchors unmapped\">") < 0)
+                error_errno("Failed to add \"UnmappedAnchors\" FILTER header");
+            if (bcf_hdr_printf(args->in_hdr, "##FILTER=<ID=UnmappedAnchor5,Description=\"5' anchor unmapped\">") < 0)
+                error_errno("Failed to add \"UnmappedAnchor5\" FILTER header");
+            if (bcf_hdr_printf(args->in_hdr, "##FILTER=<ID=UnmappedAnchor3,Description=\"3' anchor unmapped\">") < 0)
+                error_errno("Failed to add \"UnmappedAnchor3\" FILTER header");
+            if (bcf_hdr_printf(args->in_hdr,
+                               "##FILTER=<ID=MismatchAnchors,Description=\"Anchors mappings inconsistent\">")
+                < 0)
+                error_errno("Failed to add \"MismatchAnchors\" FILTER header");
+            if (bcf_hdr_printf(args->in_hdr, "##FILTER=<ID=ApartAnchors,Description=\"Anchors mapping too far apart\">")
+                < 0)
+                error_errno("Failed to add \"ApartAnchors\" FILTER header");
+            if (!args->src_fai
+                && bcf_hdr_printf(
+                       args->in_hdr,
+                       "##FILTER=<ID=MissingFasta,Description=\"Reference allele sequence could not be extended\">")
+                       < 0)
+                error_errno("Failed to add \"MissingFasta\" FILTER header");
+        }
         if (args->reject_fh == NULL || bcf_hdr_write(args->reject_fh, args->in_hdr) < 0)
             error("Error: cannot write to \"%s\": %s\n", reject_fname, strerror(errno));
     }
@@ -1236,7 +1271,7 @@ static int is_extension_needed(bcf1_t *rec, int8_t **tmp_arr, int *m_tmp_arr) {
 }
 
 // Tan, A., Abecasis, G. R., Kang, H. M., Unified representation of genetic variants.
-// Bioinformatics, (2015) https://doi.org/10.1093/bioinformatics/btv112
+// Bioinformatics, (2015) http://doi.org/10.1093/bioinformatics/btv112
 static int is_left_aligned(bcf1_t *rec, int8_t **tmp_arr, int *m_tmp_arr) {
     if (rec->n_allele == 1) return strlen(rec->d.allele[0]) <= 1;
 
@@ -1298,6 +1333,11 @@ static int liftover_bp(regidx_t *idx, regitr_t *itr, const char *t_chr, hts_pos_
 }
 
 // position are 1-based
+// returns -1 if neither anchor can be mapped
+// returns -2 if the 5' anchor is not mappable
+// returns -3 if the 3' anchor is not mappable
+// returns -4 if anchors mapped but in an inconsistent way
+// returns -5 if anchors mapped too far from each other
 static int liftover_indel(regidx_t *idx, regitr_t *itr, const char *src_chr, hts_pos_t src_pos5, hts_pos_t src_pos3,
                           int max_indel_inc, int *dst_rid, hts_pos_t *dst_pos5, hts_pos_t *dst_pos3, int *strand,
                           int *npad) {
@@ -1319,8 +1359,10 @@ static int liftover_indel(regidx_t *idx, regitr_t *itr, const char *src_chr, hts
         // identify new 5' anchor
         const block_t *aux_block = prev_block(block3, args->blocks, args->chains); // identify the previous block
         *npad = aux_block ? aux_chain->tStart + aux_block->tStart + aux_block->size - src_pos5 : -max_indel_inc;
-        if (*npad < -max_indel_inc || *npad >= 0)
-            *npad = -max_indel_inc;                     // rare cases where the indel spans the whole previous block
+        if (*npad < -max_indel_inc || *npad >= 0) {
+            *npad = -max_indel_inc; // rare cases where the indel spans the whole previous block
+            if (*npad > src_pos5 - src_pos3) return -2;
+        }
         if (src_pos5 + *npad < 1) *npad = 1 - src_pos5; // hit left edge on the source chromosome
 
         // attempt to liftover the new anchor
@@ -1347,8 +1389,10 @@ static int liftover_indel(regidx_t *idx, regitr_t *itr, const char *src_chr, hts
         // identify new 3' anchor
         const block_t *aux_block = next_block(block5, args->blocks, args->chains); // identify the next block
         *npad = aux_block ? aux_chain->tStart + aux_block->tStart + 1 - src_pos3 : max_indel_inc;
-        if (*npad > max_indel_inc || *npad <= 0)
+        if (*npad > max_indel_inc || *npad <= 0) {
             *npad = max_indel_inc; // rare cases where the indel spans the whole next block
+            if (*npad < src_pos3 - src_pos5) return -3;
+        }
         if (src_pos3 + *npad > src_chr_size) *npad = src_chr_size - src_pos3; // hit right edge on the source chromosome
 
         // attempt to liftover the new anchor
@@ -1367,12 +1411,12 @@ static int liftover_indel(regidx_t *idx, regitr_t *itr, const char *src_chr, hts
             }
         }
     } else {
-        if (block5->chain_ind != block3->chain_ind) return -1;
-        if (rid5 != rid3) return -1;
+        if (block5->chain_ind != block3->chain_ind) return -4;
+        if (rid5 != rid3) return -4;
         *dst_rid = rid5;
-        if (strand5 != strand3) return -1;
+        if (strand5 != strand3) return -4;
         *strand = strand5;
-        if (abs((int)(pos3 - pos5)) > src_pos3 - src_pos5 + max_indel_inc) return -1;
+        if (abs((int)(pos3 - pos5)) > src_pos3 - src_pos5 + max_indel_inc) return -5;
     }
 
     *dst_pos5 = *strand == 0 ? pos5 : pos3;
@@ -2294,6 +2338,9 @@ bcf1_t *process(bcf1_t *rec) {
         args->warning_symbolic = 1;
     }
 
+    if (rec->errcode == BCF_ERR_CTG_UNDEF)
+        fprintf(stderr, "Warning: variants from contig %s cannot be lift over\n", bcf_seqname(args->in_hdr, rec));
+
     const char *src_chr = bcf_hdr_id2name(args->in_hdr, rec->rid);
     hts_pos_t src_pos = rec->pos + 1;
     if (args->reject_fh || args->write_src) {
@@ -2336,6 +2383,7 @@ bcf1_t *process(bcf1_t *rec) {
         }
     }
 
+    // if no chain file was provided return the record as is
     if (!args->idx) return rec;
     args->ntotal++;
 
@@ -2357,6 +2405,24 @@ bcf1_t *process(bcf1_t *rec) {
             if ((!is_snp || is_difficult_snp) && !is_symbolic) {
                 rec->pos = src_pos - 1;
                 bcf_update_alleles_str(args->in_hdr, rec, args->tmp_kstr.s);
+            }
+            // include explanation for rejection
+            if (args->reject_filter) {
+                if (rec->rid >= args->n_ctgs) {
+                    bcf_add_filter(args->in_hdr, rec, bcf_hdr_id2int(args->in_hdr, BCF_DT_ID, "MissingContig"));
+                } else if (ret == -1) {
+                    bcf_add_filter(args->in_hdr, rec, bcf_hdr_id2int(args->in_hdr, BCF_DT_ID, "UnmappedAnchors"));
+                } else if (ret == -2) {
+                    bcf_add_filter(args->in_hdr, rec, bcf_hdr_id2int(args->in_hdr, BCF_DT_ID, "UnmappedAnchor5"));
+                } else if (ret == -3) {
+                    bcf_add_filter(args->in_hdr, rec, bcf_hdr_id2int(args->in_hdr, BCF_DT_ID, "UnmappedAnchor3"));
+                } else if (ret == -4) {
+                    bcf_add_filter(args->in_hdr, rec, bcf_hdr_id2int(args->in_hdr, BCF_DT_ID, "MismatchAnchors"));
+                } else if (ret == -5) {
+                    bcf_add_filter(args->in_hdr, rec, bcf_hdr_id2int(args->in_hdr, BCF_DT_ID, "ApartAnchors"));
+                } else if (ret == 0) {
+                    bcf_add_filter(args->in_hdr, rec, bcf_hdr_id2int(args->in_hdr, BCF_DT_ID, "MissingFasta"));
+                }
             }
             if (bcf_write(args->reject_fh, args->in_hdr, rec) < 0) error("Error: Unable to write to output VCF file\n");
         }
