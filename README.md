@@ -332,7 +332,7 @@ export BCFTOOLS_PLUGINS="$HOME/bin"
 
 Install the GRCh37 human genome reference, cytoband and chain file
 ```
-wget -O- ftp://ftp.1000genomes.ebi.ac.uk/vol1/ftp/technical/reference/human_g1k_v37.fasta.gz | \
+wget --continue 'ftp://ftp.1000genomes.ebi.ac.uk/vol1/ftp/technical/reference/human_g1k_v37.fasta.gz' -O $HOME/GRCh37/human_g1k_v37.fasta.gz
   gzip -d > $HOME/GRCh37/human_g1k_v37.fasta
 samtools faidx $HOME/GRCh37/human_g1k_v37.fasta
 bwa index $HOME/GRCh37/human_g1k_v37.fasta
