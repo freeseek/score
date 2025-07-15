@@ -35,7 +35,7 @@
 #include "bcftools.h"
 #include "filter.h"
 
-#define METAL_VERSION "2024-09-27"
+#define METAL_VERSION "2024-10-10"
 
 // Logic of the filters: include or exclude sites which match the filters?
 #define FLT_INCLUDE 1
@@ -909,7 +909,7 @@ int run(int argc, char **argv) {
         output[NS] = 0;
         output[NC] = 0;
         output[AC] = 0;
-        output[NE] = 1;
+        if (szw) output[NE] = 1;
     }
     for (idx = 0; idx < SIZE; idx++)
         if (output[idx]
@@ -1122,7 +1122,6 @@ int run(int argc, char **argv) {
 
                 if (szw) { // sample-size weighted scheme
                     val_arr[n_smpl * EZ + i] = (float)xnum / sqrt(xden);
-                    val_arr[n_smpl * NE + i] = (float)xden;
                 } else { // inverse-variance weighted scheme
                     val_arr[n_smpl * ES + i] = (float)(xnum / xden);
                     val_arr[n_smpl * SE + i] = (float)sqrt(1.0 / xden);

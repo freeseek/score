@@ -131,6 +131,40 @@ bcftools +pgs \
 Bipolar Disorder
 ----------------
 
+Download [BIP summary statistics](http://figshare.com/articles/dataset/bip2024/27216117) from [2024 BIP](http://doi.org/10.1038/s41586-024-08468-9) study
+```
+wget -O bip2024_afr_no23andMe.gz http://figshare.com/ndownloader/files/49760766
+wget -O bip2024_eas_no23andMe.gz http://figshare.com/ndownloader/files/49760769
+wget -O bip2024_eur_no23andMe.gz http://figshare.com/ndownloader/files/49760772
+# wget -O bip2024_multianc_no23andMe.gz http://figshare.com/ndownloader/files/49760775
+# wget -O bip2024_eur_noUKB_no23andMe.gz http://figshare.com/ndownloader/files/49760787
+# wget -O bip2024_eur_clinical_no23andMe_update.gz http://figshare.com/ndownloader/files/52065002
+# wget -O bip2024_eur_community_no23andMe_noUKB_update.gz http://figshare.com/ndownloader/files/52064996
+# wget -O bip2024_eur_community_no23andMe_update.gz http://figshare.com/ndownloader/files/52064999
+
+for pfx in afr eas eur; do
+  bcftools +munge --no-version -Ou -C colheaders.tsv -f human_g1k_v37.fasta -s BIP_2024.${pfx^^} bip2024_${pfx}_no23andMe.gz | \
+  bcftools +liftover --no-version -Ou -- -s human_g1k_v37.fasta \
+    -f GCA_000001405.15_GRCh38_no_alt_analysis_set.fna -c hg19ToHg38.over.chain.gz | \
+  bcftools sort -o bip2024_${pfx}_no23andMe.hg38.bcf -Ob --write-index
+done
+bcftools merge --no-version -m none -o bip2024_no23andMe.hg38.bcf -Ob \
+  bip2024_{afr,eas,eur}_no23andMe.hg38.bcf --write-index
+/bin/rm bip2024_{afr,eas,eur}_no23andMe.hg38.bcf{,.csi}
+
+bcftools +pgs \
+  --no-version \
+  --beta-cov 5e-8 \
+  --max-alpha-hat2 0.001 \
+  --samples BIP_2024.AFR,BIP_2024.EAS,BIP_2024.EUR \
+  bip2024_no23andMe.hg38.bcf \
+  1kg_ldgm.{AFR,EAS,EUR}.bcf \
+  --output bip2024_no23andMe.hg38.pgsx.b5e-8.bcf \
+  --output-type b \
+  --log bip2024_no23andMe.hg38.pgsx.b5e-8.log \
+  --write-index
+```
+
 Download [BIP summary statistics](http://figshare.com/articles/dataset/PGC3_bipolar_disorder_GWAS_summary_statistics/14102594) from [2021 BIP](http://doi.org/10.1038/s41588-021-00857-4) study
 ```
 wget -O pgc-bip2021-all.vcf.tsv.gz http://s3-eu-west-1.amazonaws.com/pfigshare-u-files/26603681/pgcbip2021all.vcf.tsv.gz
@@ -185,6 +219,28 @@ bcftools +pgs \
 
 Major Depressive Disorder
 -------------------------
+
+Download [MDD summary statistics](http://figshare.com/articles/dataset/GWAS_summary_statistics_for_major_depression_PGC_MDD2025_/27061255) from [2025 MDD](http://doi.org/10.1016/j.cell.2024.12.002) study
+```
+wget -O pgc-mdd2025_no23andMe_eur_v3-49-24-11.tsv.gz http://figshare.com/ndownloader/files/51487019
+
+bcftools +munge --no-version -Ou -C colheaders.tsv -f human_g1k_v37.fasta -s MDD_2025 pgc-mdd2025_no23andMe_eur_v3-49-24-11.tsv.gz | \
+bcftools +liftover --no-version -Ou -- -s human_g1k_v37.fasta \
+  -f GCA_000001405.15_GRCh38_no_alt_analysis_set.fna -c hg19ToHg38.over.chain.gz | \
+bcftools sort -o pgc-mdd2025_no23andMe_eur_v3-49-24-11.hg38.bcf -Ob --write-index
+
+bcftools +pgs \
+  --no-version \
+  --beta-cov 2e-8 \
+  --max-alpha-hat2 0.0005 \
+  --exclude 'FILTER="IFFY"' \
+  pgc-mdd2025_no23andMe_eur_v3-49-24-11.hg38.bcf \
+  1kg_ldgm.EUR.bcf \
+  --output pgc-mdd2025_no23andMe_eur_v3-49-24-11.hg38.pgs.b2e-8.bcf \
+  --output-type b \
+  --log pgc-mdd2025_no23andMe_eur_v3-49-24-11.hg38.pgs.b2e-8.log \
+  --write-index
+```
 
 Download [MDD summary statistics](http://figshare.com/articles/dataset/mdd2021asi/16989442) from [2021 MDD](http://doi.org/10.1001/jamapsychiatry.2021.2099) study (samples sizes estimated from eTable2)
 ```
@@ -331,7 +387,7 @@ while read anc type; do
 done
 bcftools merge --no-version -m none -o pts_freeze2_overall.hg38.bcf -Ob \
   pts_{aam,eur,lat}_freeze2_overall.hg38.bcf --write-index
-/bin/rm pts_{aam,eur,lat}_freeze2_overall.hg38.bcf
+/bin/rm pts_{aam,eur,lat}_freeze2_overall.hg38.bcf{,.csi}
 
 bcftools +pgs \
   --no-version \
@@ -509,7 +565,7 @@ while read anc type; do
 done
 bcftools merge --no-version -m none -o GIANT_HEIGHT_YENGO_2022_GWAS_SUMMARY_STATS.hg38.bcf -Ob \
   GIANT_HEIGHT_YENGO_2022_GWAS_SUMMARY_STATS_{AFR,EAS,EUR,HIS,SAS}.hg38.bcf --write-index
-/bin/rm GIANT_HEIGHT_YENGO_2022_GWAS_SUMMARY_STATS_{AFR,EAS,EUR,HIS,SAS}.hg38.bcf
+/bin/rm GIANT_HEIGHT_YENGO_2022_GWAS_SUMMARY_STATS_{AFR,EAS,EUR,HIS,SAS}.hg38.bcf{,.csi}
 
 bcftools +pgs \
   --no-version \

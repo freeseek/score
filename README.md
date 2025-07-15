@@ -135,7 +135,8 @@ Plugin options:
 
 Options for how to update INFO/FORMAT records:
        --fix-tags                  fix Number type for INFO/AC, INFO/AF, FORMAT/GP, and FORMAT/DS tags
-       --flip-tag <string>         INFO annotation flag to record whether alleles are flipped [FLIP]
+       --lift-end                  lift the position of the INFO/END tag instead of recomputing it
+        --flip-tag <string>         INFO annotation flag to record whether alleles are flipped [FLIP]
        --swap-tag <string>         INFO annotation to record when alleles are swapped [SWAP]
        --drop-tags <list>          tags to drop when alleles are swapped [.]
        --ac-tags <list>            AC-like tags (must be Number=A,Type=Integer/Float) [INFO/AC,FMT/AC]
@@ -728,7 +729,7 @@ bcftools norm --no-version -Ou -m+ 1kGP_high_coverage_Illumina.sites.vcf.gz | \
 bcftools +liftover --no-version -Ou -- \
   -s $HOME/GRCh38/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna \
   -f $HOME/hs1/hs1.fa \
-  -c $HOME/hs1/hg38ToHs1.over.chain.gz \
+  -c $HOME/hs1/hg38ToHs1.over.chain.gz | \
 bcftools sort -o 1kGP_high_coverage_Illumina.sites.hs1.bcf -Ob --write-index
 ```
 Variants can then be split back into bi-allelic with the command `bcftools norm -m-`

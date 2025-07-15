@@ -2,7 +2,7 @@
 ###
 #  The MIT License
 #
-#  Copyright (C) 2021-2024 Giulio Genovese
+#  Copyright (C) 2021-2025 Giulio Genovese
 #
 #  Author: Giulio Genovese <giulio.genovese@gmail.com>
 #
@@ -25,9 +25,9 @@
 #  THE SOFTWARE.
 ###
 
-options(error = function() {traceback(3); q()})
+options(error = function() {traceback(3); q("no", 1)})
 
-assoc_plot_version <- '2024-09-27'
+assoc_plot_version <- '2025-07-08'
 
 suppressPackageStartupMessages(library(optparse))
 suppressPackageStartupMessages(library(data.table))

@@ -1,6 +1,6 @@
 /* The MIT License
 
-   Copyright (C) 2022-2024 Giulio Genovese
+   Copyright (C) 2022-2025 Giulio Genovese
 
    Author: Giulio Genovese <giulio.genovese@gmail.com>
 
@@ -36,7 +36,7 @@
 #include "regidx.h" // cannot use htslib/regdix.h see http://github.com/samtools/htslib/pull/761
 KHASH_MAP_INIT_STR(vdict, bcf_idinfo_t)
 
-#define LIFTOVER_VERSION "2024-09-27"
+#define LIFTOVER_VERSION "2025-07-15"
 
 #define FLIP_TAG "FLIP"
 #define SWAP_TAG "SWAP"
@@ -149,6 +149,7 @@ typedef struct {
     int write_fail;
     int write_nw;
     int reject_filter;
+    int lift_end;
 
     int info_end_id;
     int info_an_id;
@@ -526,6 +527,7 @@ const char *usage(void) {
            "\n"
            "Options for how to update INFO/FORMAT records:\n"
            "       --fix-tags                  fix Number type for INFO/AC, INFO/AF, FORMAT/GP, and FORMAT/DS tags\n"
+           "       --lift-end                  lift the position of the INFO/END tag instead of recomputing it\n"
            "       --flip-tag <string>         INFO annotation flag to record whether alleles are flipped [FLIP]\n"
            "       --swap-tag <string>         INFO annotation to record when alleles are swapped [SWAP]\n"
            "       --drop-tags <list>          tags to drop when alleles are swapped [" DROP_TAGS
@@ -608,14 +610,15 @@ int init(int argc, char **argv, bcf_hdr_t *in, bcf_hdr_t *out) {
                                        {"write-nw", no_argument, NULL, 10},
                                        {"write-reject", no_argument, NULL, 11},
                                        {"fix-tags", no_argument, NULL, 12},
-                                       {"flip-tag", required_argument, NULL, 13},
-                                       {"swap-tag", required_argument, NULL, 14},
-                                       {"drop-tags", required_argument, NULL, 15},
-                                       {"ac-tags", required_argument, NULL, 16},
-                                       {"af-tags", required_argument, NULL, 17},
-                                       {"ds-tags", required_argument, NULL, 18},
-                                       {"gt-tags", required_argument, NULL, 19},
-                                       {"es-tags", required_argument, NULL, 20},
+                                       {"lift-end", no_argument, NULL, 13},
+                                       {"flip-tag", required_argument, NULL, 14},
+                                       {"swap-tag", required_argument, NULL, 15},
+                                       {"drop-tags", required_argument, NULL, 16},
+                                       {"ac-tags", required_argument, NULL, 17},
+                                       {"af-tags", required_argument, NULL, 18},
+                                       {"ds-tags", required_argument, NULL, 19},
+                                       {"gt-tags", required_argument, NULL, 20},
+                                       {"es-tags", required_argument, NULL, 21},
                                        {NULL, 0, NULL, 0}};
     int c;
     while ((c = getopt_long(argc, argv, "h?s:f:c:O:", loptions, NULL)) >= 0) {
@@ -694,27 +697,30 @@ int init(int argc, char **argv, bcf_hdr_t *in, bcf_hdr_t *out) {
             fix_tags = 1;
             break;
         case 13:
-            args->flip_tag = optarg;
+            args->lift_end = 1;
             break;
         case 14:
-            args->swap_tag = optarg;
+            args->flip_tag = optarg;
             break;
         case 15:
-            drop_tags = optarg;
+            args->swap_tag = optarg;
             break;
         case 16:
-            ac_tags = optarg;
+            drop_tags = optarg;
             break;
         case 17:
-            af_tags = optarg;
+            ac_tags = optarg;
             break;
         case 18:
-            ds_tags = optarg;
+            af_tags = optarg;
             break;
         case 19:
-            gt_tags = optarg;
+            ds_tags = optarg;
             break;
         case 20:
+            gt_tags = optarg;
+            break;
+        case 21:
             es_tags = optarg;
             break;
         case 'h':
@@ -1007,6 +1013,7 @@ typedef struct {
 
 static void safe_fetch_sequence(bcf1_realign_t *this) {
     int seq_len = faidx_seq_len(this->fai, bcf_seqname(this->hdr, this->rec));
+    if (seq_len < 0) error("Unable to fetch sequence for contig %s\n", bcf_seqname(this->hdr, this->rec));
     if (this->beg + 1 < 1) this->beg = 0;
     if (this->end + 1 > seq_len) this->end = seq_len - 1;
     this->ref = fetch_sequence(this->fai, bcf_seqname(this->hdr, this->rec), this->beg + 1, this->end + 1);
@@ -1017,10 +1024,12 @@ static void safe_fetch_sequence(bcf1_realign_t *this) {
 
 static void shift_left(bcf1_realign_t *this) {
     bcf1_t *rec = this->rec;
-    if (rec->n_allele == 1) return;
+    int i, n_allele = 1;
+    for (i = 1; i < rec->n_allele; i++)
+        if (this->als[i].s[0] != '*') n_allele++;
+    if (n_allele == 1) return;
     while (rec->pos > 0) {
         char last_ref = this->als[0].s[this->als[0].l - 1];
-        int i;
         for (i = 1; i < rec->n_allele; i++) {
             if (this->als[i].s[0] == '*') continue;
             if (this->als[i].s[this->als[i].l - 1] != last_ref) return;
@@ -2509,7 +2518,20 @@ bcf1_t *process(bcf1_t *rec) {
     if (!is_symbolic) rec->rlen = strlen(rec->d.allele[0]);
     if (args->info_end_id >= 0) {
         bcf_info_t *end_info = bcf_get_info_id(rec, args->info_end_id);
-        if (end_info) end_info->v1.i = rec->pos + rec->rlen;
+        if (end_info) {
+            if (args->lift_end) {
+                int end_rid, end_strand;
+                hts_pos_t end_pos;
+                ret = liftover_bp(args->idx, args->itr, src_chr, end_info->v1.i, &end_rid, &end_pos, &end_strand);
+                if (ret >= 0 && end_rid == rec->rid && end_strand == strand
+                    && ((strand && end_pos <= rec->pos + 1) || (!strand && end_pos >= rec->pos + 1)))
+                    end_info->v1.i = end_pos;
+                else
+                    end_info->v1.i = bcf_int64_missing;
+            } else {
+                end_info->v1.i = rec->pos + rec->rlen;
+            }
+        }
     }
 
     if (!swap) return rec;
