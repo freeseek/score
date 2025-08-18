@@ -367,7 +367,7 @@ static double *invert_matrix(double *A, int n) {
         // Find the pivot element
         int max = i;
         for (int k = i + 1; k < n; k++) {
-            if (abs(A[k * n + i]) > abs(A[max * n + i])) {
+            if (fabs(A[k * n + i]) > fabs(A[max * n + i])) {
                 max = k;
             }
         }
