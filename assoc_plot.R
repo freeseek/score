@@ -101,13 +101,6 @@ if (!is.null(args$cytoband)) {
                     cbind(setNames(df_cyto[idx_q, c('chrom', 'name', 'chromEnd')], c('chrom', 'name', 'x')), y = 0))
   }
 
-  # idx <- df_cyto$gieStain %in% c('acen', 'gvar', 'stalk')
-  # if (sum(idx) > 0) {
-  #   cen_beg <- tapply(df_cyto$chromEnd[idx], df_cyto$chrom[idx], min)
-  #   cen_end <- tapply(df_cyto$chromEnd[idx], df_cyto$chrom[idx], max)
-  #   df_chrs <- data.frame(chrlen = chrlen[chrs], cen_beg = cen_beg[chrs], cen_end = cen_end[chrs], CHROM = chrs)
-  # }
-
   chrlen <- chrlen[c(1:args$nauto, 'X')]
 } else if ( args$genome == 'GRCh37' ) {
   chrlen <- setNames(c(249251621, 243199373, 198022430, 191154276, 180915260, 171115067, 159138663, 146364022, 141213431, 135534747, 135006516, 133851895, 115169878, 107349540, 102531392, 90354753, 81195210, 78077248, 59128983, 63026520, 48129895, 51305566, 155270560), c(1:22,'X'))
@@ -172,7 +165,10 @@ if (args$as) {
   df <- df[!is.na(df$lp),]
 }
 
-if (nrow(df) == 0) stop('nothing to be plotted')
+if (nrow(df) == 0) {
+  write('Nothing to be plotted', stderr())
+  quit()
+}
 
 df$chrom <- as.factor(gsub('^chr', '', gsub('^chrM', 'MT', df$chrom)))
 ord <- order(as.numeric(gsub('MT', '26', gsub('Y', '24', gsub('X', '23', levels(df$chrom))))))

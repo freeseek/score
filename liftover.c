@@ -36,7 +36,7 @@
 #include "regidx.h" // cannot use htslib/regdix.h see http://github.com/samtools/htslib/pull/761
 KHASH_MAP_INIT_STR(vdict, bcf_idinfo_t)
 
-#define LIFTOVER_VERSION "2025-08-19"
+#define LIFTOVER_VERSION "2025-08-20"
 
 #define FLIP_TAG "FLIP"
 #define SWAP_TAG "SWAP"
@@ -186,13 +186,12 @@ args_t *args;
  ****************************************/
 
 static inline int bcf_hdr_name2id_flexible(const bcf_hdr_t *hdr, char *chr) {
-    if (!chr) return -1;
-    char buf[] = {'c', 'h', 'r', '\0', '\0', '\0'};
+    if (!chr || strlen(chr) < 1) return -1;
     int rid = bcf_hdr_name2id(hdr, chr);
     if (rid >= 0) return rid;
     if (strncmp(chr, "chr", 3) == 0) rid = bcf_hdr_name2id(hdr, chr + 3);
     if (rid >= 0) return rid;
-    strncpy(buf + 3, chr, 2);
+    char buf[] = {'c', 'h', 'r', chr[0], chr[1], '\0'};
     rid = bcf_hdr_name2id(hdr, buf);
     if (rid >= 0) return rid;
     if (strcmp(chr, "23") == 0 || strcmp(chr, "25") == 0 || strcmp(chr, "XY") == 0 || strcmp(chr, "XX") == 0
