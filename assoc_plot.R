@@ -27,7 +27,7 @@
 
 options(error = function() {traceback(3); q("no", 1)})
 
-assoc_plot_version <- '2025-07-08'
+assoc_plot_version <- '2025-08-19'
 
 suppressPackageStartupMessages(library(optparse))
 suppressPackageStartupMessages(library(data.table))

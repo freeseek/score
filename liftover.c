@@ -36,7 +36,7 @@
 #include "regidx.h" // cannot use htslib/regdix.h see http://github.com/samtools/htslib/pull/761
 KHASH_MAP_INIT_STR(vdict, bcf_idinfo_t)
 
-#define LIFTOVER_VERSION "2025-07-15"
+#define LIFTOVER_VERSION "2025-08-19"
 
 #define FLIP_TAG "FLIP"
 #define SWAP_TAG "SWAP"

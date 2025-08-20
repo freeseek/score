@@ -1,6 +1,6 @@
 /* The MIT License
 
-   Copyright (C) 2022-2024 Giulio Genovese
+   Copyright (C) 2022-2025 Giulio Genovese
 
    Author: Giulio Genovese <giulio.genovese@gmail.com>
 
@@ -35,7 +35,7 @@
 #include "bcftools.h"
 #include "filter.h"
 
-#define METAL_VERSION "2024-10-10"
+#define METAL_VERSION "2025-08-19"
 
 // Logic of the filters: include or exclude sites which match the filters?
 #define FLT_INCLUDE 1

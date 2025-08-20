@@ -1,6 +1,6 @@
 /* The MIT License
 
-   Copyright (C) 2022-2024 Giulio Genovese
+   Copyright (C) 2022-2025 Giulio Genovese
 
    Author: Giulio Genovese <giulio.genovese@gmail.com>
 
@@ -33,7 +33,7 @@
 #include "bcftools.h"
 #include "filter.h"
 
-#define BLUP_VERSION "2024-09-27"
+#define BLUP_VERSION "2025-08-19"
 
 #define AVERAGE_LD_SCORE_DFLT 72.6
 #define MEDIAN_CHISQ 0.45493642311957283031 // qchisq(.5,1)

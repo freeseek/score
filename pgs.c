@@ -1,6 +1,6 @@
 /* The MIT License
 
-   Copyright (C) 2022-2024 Giulio Genovese
+   Copyright (C) 2022-2025 Giulio Genovese
 
    Author: Giulio Genovese <giulio.genovese@gmail.com>
 
@@ -37,7 +37,7 @@
 #include "filter.h"
 #include "cholmod.h"
 
-#define PGS_VERSION "2024-09-27"
+#define PGS_VERSION "2025-08-19"
 
 #define AVERAGE_LD_SCORE_DFLT 72.6
 #define EXPECTED_RATIO_DFLT 0.6
