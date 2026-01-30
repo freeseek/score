@@ -36,7 +36,7 @@
 #include "regidx.h" // cannot use htslib/regdix.h see http://github.com/samtools/htslib/pull/761
 KHASH_MAP_INIT_STR(vdict, bcf_idinfo_t)
 
-#define LIFTOVER_VERSION "2026-01-29"
+#define LIFTOVER_VERSION "2026-01-30"
 
 #define FLIP_TAG "FLIP"
 #define SWAP_TAG "SWAP"
@@ -2517,6 +2517,8 @@ bcf1_t *process(bcf1_t *rec) {
     if (!is_symbolic) rec->rlen = strlen(rec->d.allele[0]);
     if (args->info_end_id >= 0) {
         bcf_info_t *end_info = bcf_get_info_id(rec, args->info_end_id);
+        // in HTSlib, according to bcf_update_info(), the END info tag must be either BCF_HT_INT or BCF_HT_LONG
+        int type = bcf_hdr_id2type(args->out_hdr, BCF_HL_INFO, args->info_end_id);
         if (end_info) {
             if (args->lift_end) {
                 int end_rid, end_strand;
@@ -2526,12 +2528,16 @@ bcf1_t *process(bcf1_t *rec) {
                     && ((strand && end_pos <= rec->pos + 1) || (!strand && end_pos >= rec->pos + 1)))
                     end_info->v1.i = end_pos;
                 else
-                    end_info->v1.i = bcf_int64_missing;
+                    end_info->v1.i = type == BCF_HT_INT ? bcf_int32_missing : bcf_int64_missing;
             } else {
                 end_info->v1.i = rec->pos + rec->rlen;
             }
         }
-        bcf_update_info_int32(args->out_hdr, rec, "END", &end_info->v1.i, 1);
+        if (type == BCF_HT_INT) {
+            bcf_update_info_int32(args->out_hdr, rec, "END", &end_info->v1.i, 1);
+        } else {
+            bcf_update_info_int64(args->out_hdr, rec, "END", &end_info->v1.i, 1);
+        }
     }
 
     if (!swap) return rec;
