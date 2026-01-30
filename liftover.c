@@ -1,6 +1,6 @@
 /* The MIT License
 
-   Copyright (C) 2022-2025 Giulio Genovese
+   Copyright (C) 2022-2026 Giulio Genovese
 
    Author: Giulio Genovese <giulio.genovese@gmail.com>
 
@@ -36,7 +36,7 @@
 #include "regidx.h" // cannot use htslib/regdix.h see http://github.com/samtools/htslib/pull/761
 KHASH_MAP_INIT_STR(vdict, bcf_idinfo_t)
 
-#define LIFTOVER_VERSION "2025-08-20"
+#define LIFTOVER_VERSION "2026-01-29"
 
 #define FLIP_TAG "FLIP"
 #define SWAP_TAG "SWAP"
@@ -2531,6 +2531,7 @@ bcf1_t *process(bcf1_t *rec) {
                 end_info->v1.i = rec->pos + rec->rlen;
             }
         }
+        bcf_update_info_int32(args->out_hdr, rec, "END", &end_info->v1.i, 1);
     }
 
     if (!swap) return rec;
