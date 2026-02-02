@@ -36,7 +36,7 @@
 #include "regidx.h" // cannot use htslib/regdix.h see http://github.com/samtools/htslib/pull/761
 KHASH_MAP_INIT_STR(vdict, bcf_idinfo_t)
 
-#define LIFTOVER_VERSION "2026-01-30"
+#define LIFTOVER_VERSION "2026-02-02"
 
 #define FLIP_TAG "FLIP"
 #define SWAP_TAG "SWAP"
@@ -2520,23 +2520,17 @@ bcf1_t *process(bcf1_t *rec) {
         // in HTSlib, according to bcf_update_info(), the END info tag must be either BCF_HT_INT or BCF_HT_LONG
         int type = bcf_hdr_id2type(args->out_hdr, BCF_HL_INFO, args->info_end_id);
         if (end_info) {
+            hts_pos_t end_pos;
             if (args->lift_end) {
                 int end_rid, end_strand;
-                hts_pos_t end_pos;
                 ret = liftover_bp(args->idx, args->itr, src_chr, end_info->v1.i, &end_rid, &end_pos, &end_strand);
-                if (ret >= 0 && end_rid == rec->rid && end_strand == strand
-                    && ((strand && end_pos <= rec->pos + 1) || (!strand && end_pos >= rec->pos + 1)))
-                    end_info->v1.i = end_pos;
-                else
-                    end_info->v1.i = type == BCF_HT_INT ? bcf_int32_missing : bcf_int64_missing;
+                if (ret < 0 || end_rid != rec->rid || end_strand != strand
+                    || ((strand && end_pos > rec->pos + 1) || (!strand && end_pos < rec->pos + 1)))
+                    end_pos = type == BCF_HT_INT ? bcf_int32_missing : bcf_int64_missing;
             } else {
-                end_info->v1.i = rec->pos + rec->rlen;
+                end_pos = rec->pos + rec->rlen;
             }
-        }
-        if (type == BCF_HT_INT) {
-            bcf_update_info_int32(args->out_hdr, rec, "END", &end_info->v1.i, 1);
-        } else {
-            bcf_update_info_int64(args->out_hdr, rec, "END", &end_info->v1.i, 1);
+            bcf_update_info(args->out_hdr, rec, "END", &end_pos, 1, type);
         }
     }
 
