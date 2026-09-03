@@ -19,13 +19,18 @@ Polygenic score examples
       * [Intelligence](#intelligence)
       * [Height](#height)
       * [BMI](#bmi)
+      * [Blood Pressure](#blood-pressure)
       * [Smoking](#smoking)
       * [Alzheimer](#alzheimer)
+      * [Multiple Sclerosis](#multiple-sclerosis)
+      * [Cortical Atrophy](#cortical-atrophy)
       * [Intracranial Volume](#intracranial-volume)
       * [Hippocampal Volume](#hippocampal-volume)
       * [Cortical](#cortical)
       * [Oscillatory Brain Activity](#oscillatory-brain-activity)
       * [Breast Cancer](#breast-cancer)
+      * [Epigenetic Age Acceleration](#epigenetic-age-acceleration)
+      * [DNA methylation biomarkers of aging](#dna-methylation-biomarkers-of-aging)
 <!--te-->
 
 Examples
@@ -606,6 +611,75 @@ bcftools +pgs \
   --write-index
 ```
 
+Blood Pressure
+--------------
+
+Download [Systolic Blood Pressure](http://www.ebi.ac.uk/gwas/studies/GCST90310294) from [2024 SBP](http://doi.org/10.1038/s41588-024-01714-w) study
+
+```
+wget http://ftp.ebi.ac.uk/pub/databases/gwas/summary_statistics/GCST90310001-GCST90311000/GCST90310294/GCST90310294.tsv.gz
+
+bcftools +munge --no-version -Ou -c SSF -f human_g1k_v37.fasta -s SBP_2024 GCST90310294.tsv.gz | \
+bcftools +liftover --no-version -Ou -- -s human_g1k_v37.fasta \
+  -f GCA_000001405.15_GRCh38_no_alt_analysis_set.fna -c hg19ToHg38.over.chain.gz | \
+bcftools sort -o GCST90310294.hg38.bcf -Ob --write-index
+
+bcftools +pgs \
+  --no-version \
+  --beta-cov 2e-8 \
+  --max-alpha-hat2 0.001 \
+  GCST90310294.hg38.bcf \
+  1kg_ldgm.EUR.bcf \
+  --output GCST90310294.hg38.pgs.b2e-8.bcf \
+  --output-type b \
+  --log GCST90310294.hg38.pgs.b2e-8.log \
+  --write-index
+```
+
+Download [Diastolic Blood Pressure](http://www.ebi.ac.uk/gwas/studies/GCST90310295) from [2024 DBP](http://doi.org/10.1038/s41588-024-01714-w) study
+
+```
+wget http://ftp.ebi.ac.uk/pub/databases/gwas/summary_statistics/GCST90310001-GCST90311000/GCST90310295/GCST90310295.tsv.gz
+
+bcftools +munge --no-version -Ou -c SSF -f human_g1k_v37.fasta -s DBP_2024 GCST90310295.tsv.gz | \
+bcftools +liftover --no-version -Ou -- -s human_g1k_v37.fasta \
+  -f GCA_000001405.15_GRCh38_no_alt_analysis_set.fna -c hg19ToHg38.over.chain.gz | \
+bcftools sort -o GCST90310295.hg38.bcf -Ob --write-index
+
+bcftools +pgs \
+  --no-version \
+  --beta-cov 2e-8 \
+  --max-alpha-hat2 0.001 \
+  GCST90310295.hg38.bcf \
+  1kg_ldgm.EUR.bcf \
+  --output GCST90310295.hg38.pgs.b2e-8.bcf \
+  --output-type b \
+  --log GCST90310295.hg38.pgs.b2e-8.log \
+  --write-index
+```
+
+Download [Pulse Pressure](http://www.ebi.ac.uk/gwas/studies/GCST90310296) from [2024 PP](http://doi.org/10.1038/s41588-024-01714-w) study
+
+```
+wget http://ftp.ebi.ac.uk/pub/databases/gwas/summary_statistics/GCST90310001-GCST90311000/GCST90310296/GCST90310296.tsv.gz
+
+bcftools +munge --no-version -Ou -c SSF -f human_g1k_v37.fasta -s PP_2024 GCST90310296.tsv.gz | \
+bcftools +liftover --no-version -Ou -- -s human_g1k_v37.fasta \
+  -f GCA_000001405.15_GRCh38_no_alt_analysis_set.fna -c hg19ToHg38.over.chain.gz | \
+bcftools sort -o GCST90310296.hg38.bcf -Ob --write-index
+
+bcftools +pgs \
+  --no-version \
+  --beta-cov 2e-8 \
+  --max-alpha-hat2 0.001 \
+  GCST90310296.hg38.bcf \
+  1kg_ldgm.EUR.bcf \
+  --output GCST90310296.hg38.pgs.b2e-8.bcf \
+  --output-type b \
+  --log GCST90310296.hg38.pgs.b2e-8.log \
+  --write-index
+```
+
 Smoking
 -------
 
@@ -669,6 +743,107 @@ bcftools +pgs \
   --log GCST90027158.hg38.pgs.b2e-8.log \
   --write-index
 ```
+
+Multiple Sclerosis
+------------------
+
+Download [Multiple sclerosis summary statistics](https://imsgc.net/?page_id=31) from [2019 Mutliple Sclerosis](http://doi.org/10.1126/science.aav7188) study
+
+You will have to replace the `xxx` with the directory provided by the tead of the IMSGC data access committee
+```
+wget http://imsgc.net/xxx/discovery_metav3.0.meta.gz
+wget http://imsgc.net/xxx/discovery_metav2.8.chrX.meta.gz
+
+zcat discovery_metav3.0.meta.gz | awk 'NR==1 || $6>1 && $7!="NA" && $7!=0' | \
+bcftools +munge --no-version -Ou -c PLINK -f human_g1k_v37.fasta -s MS_2019 --ns 115803 --nc 47429 | \
+bcftools +liftover --no-version -Ou -- -s human_g1k_v37.fasta \
+  -f GCA_000001405.15_GRCh38_no_alt_analysis_set.fna -c hg19ToHg38.over.chain.gz | \
+bcftools sort -o discovery_metav3.0.hg38.bcf -Ob --write-index
+
+bcftools +pgs \
+  --no-version \
+  --beta-cov 1e-8 \
+  --max-alpha-hat2 0.01 \
+  discovery_metav3.0.hg38.bcf \
+  1kg_ldgm.EUR.bcf \
+  --output discovery_metav3.0.hg38.pgs.b1e-8.bcf \
+  --output-type b \
+  --log discovery_metav3.0.hg38.pgs.b1e-8.log \
+  --write-index
+```
+Notice that 1,026 in the MHC had to be excluded has the p-value was reported as 0 without standard errors for the effect sizes
+
+Download [Multiple sclerosis summary statistics](https://imsgc.net/?page_id=31) from [2023 Mutliple Sclerosis](http://doi.org/10.1038/s41586-023-06250-x) study
+
+You will have to replace the `xxx` with the directory provided by the tead of the IMSGC data access committee
+```
+wget http://imsgc.net/xxx/imsgc_mssev_discovery.tar.gz
+
+tar xzvf imsgc_mssev_discovery.tar.gz imsgc_mssev_discovery/imsgc_mssev_discovery.tsv --to-stdout | \
+bcftools +munge --no-version -Ou -C colheaders.tsv -f human_g1k_v37.fasta -s MS_2023 --ns 12584 | \
+bcftools +liftover --no-version -Ou -- -s human_g1k_v37.fasta \
+  -f GCA_000001405.15_GRCh38_no_alt_analysis_set.fna -c hg19ToHg38.over.chain.gz | \
+bcftools sort -o imsgc_mssev_discovery.hg38.bcf -Ob --write-index
+
+bcftools +pgs \
+  --no-version \
+  --beta-cov 5e-8 \
+  --max-alpha-hat2 0.002 \
+  imsgc_mssev_discovery.hg38.bcf \
+  1kg_ldgm.EUR.bcf \
+  --output imsgc_mssev_discovery.hg38.pgs.b5e-8.bcf \
+  --output-type b \
+  --log imsgc_mssev_discovery.hg38.pgs.b5e-8.log \
+  --write-index
+```
+
+Cortical Atrophy
+----------------
+
+Download [cortical thickness in the insular region summary statistics](http://figshare.com/articles/dataset/White_matter_hyperintensities_and_cortical_atrophy_genetic_risk_factors_and_underlying_neurobiology/27038320) from [2024 cortical atrophy](http://doi.org/10.1038/s41467-024-53689-1) study
+```
+wget -U "" -O metaGWAS_PC1_WMH_insulaTH_20241003.txt.gz http://figshare.com/ndownloader/files/49595412
+
+bcftools +munge --no-version -Ou -C colheaders.tsv -f human_g1k_v37.fasta -s insulaTH_2024 metaGWAS_PC1_WMH_insulaTH_20241003.txt.gz | \
+bcftools view --no-version -Ou -f . | \
+bcftools +liftover --no-version -Ou -- -s human_g1k_v37.fasta \
+  -f GCA_000001405.15_GRCh38_no_alt_analysis_set.fna -c hg19ToHg38.over.chain.gz | \
+bcftools sort -o metaGWAS_PC1_WMH_insulaTH_20241003.hg38.bcf -Ob --write-index
+
+bcftools +pgs \
+  --no-version \
+  --beta-cov 5e-8 \
+  --max-alpha-hat2 0.002 \
+  metaGWAS_PC1_WMH_insulaTH_20241003.hg38.bcf \
+  1kg_ldgm.EUR.bcf \
+  --output metaGWAS_PC1_WMH_insulaTH_20241003.hg38.pgs.b5e-8.bcf \
+  --output-type b \
+  --log metaGWAS_PC1_WMH_insulaTH_20241003.hg38.pgs.b5e-8.log \
+  --write-index
+```
+
+Download [global mean cortical thickness summary statistics](http://figshare.com/articles/dataset/White_matter_hyperintensities_and_cortical_atrophy_genetic_risk_factors_and_underlying_neurobiology/27038320) from [2024 cortical atrophy](http://doi.org/10.1038/s41467-024-53689-1) study
+```
+wget -U "" -O metaGWAS_PC1_WMH_MCT_20241003.txt.gz http://figshare.com/ndownloader/files/49595409
+
+bcftools +munge --no-version -Ou -C colheaders.tsv -f human_g1k_v37.fasta -s MCT_2024 metaGWAS_PC1_WMH_MCT_20241003.txt.gz | \
+bcftools view --no-version -Ou -f . | \
+bcftools +liftover --no-version -Ou -- -s human_g1k_v37.fasta \
+  -f GCA_000001405.15_GRCh38_no_alt_analysis_set.fna -c hg19ToHg38.over.chain.gz | \
+bcftools sort -o metaGWAS_PC1_WMH_MCT_20241003.hg38.bcf -Ob --write-index
+
+bcftools +pgs \
+  --no-version \
+  --beta-cov 1e-7 \
+  --max-alpha-hat2 0.002 \
+  metaGWAS_PC1_WMH_MCT_20241003.hg38.bcf \
+  1kg_ldgm.EUR.bcf \
+  --output metaGWAS_PC1_WMH_MCT_20241003.hg38.pgs.b5e-8.bcf \
+  --output-type b \
+  --log metaGWAS_PC1_WMH_MCT_20241003.hg38.pgs.b5e-8.log \
+  --write-index
+```
+
 
 Intracranial Volume
 -------------------
@@ -766,8 +941,7 @@ bcftools +pgs \
 Oscillatory Brain Activity
 --------------------------
 
-Download [EEG summary statistics](http://enigma-brain.org/download/sumstats/getFiles.php?key=MmIyZTNmMzljNWRiYWM0OWY2OTAwZGFlNjUxMTNmZTM=
-) from [2018 EEG](http://doi.org/10.1002/hbm.24238) study
+Download [EEG summary statistics](http://enigma-brain.org/download/sumstats/getFiles.php?key=MmIyZTNmMzljNWRiYWM0OWY2OTAwZGFlNjUxMTNmZTM=) from [2018 EEG](http://doi.org/10.1002/hbm.24238) study
 
 ```
 echo alphaCz alphaOcc betaCz deltaCz peakOcc thetaCz | tr ' ' '\n' | cat -n | \
@@ -782,16 +956,18 @@ while read n pfx; do
 done
 ```
 
+
+
 Breast Cancer
 -------------
 
 Download [breast cancer summary statistics](https://drive.google.com/drive/folders/1UZHnFkT8xlcSOPM9ATmpx_QQv2mcQewA?usp=sharing) from [2020 breast cancer](http://doi.org/10.1038/s41588-020-0609-2) study
 
 ```
-wget -O- CIMBA_BRCA1_BCAC_TN_meta_summary_level_statistics.txt https://drive.google.com/file/d/1rMzEjNwyegS3J_eY15szLFfSzi6Vxrwe/view?usp=drive_link
+wget -O- https://drive.google.com/file/d/1rMzEjNwyegS3J_eY15szLFfSzi6Vxrwe/view?usp=drive_link | gzip > CIMBA_BRCA1_BCAC_TN_meta_summary_level_statistics.txt.gz 
 
-cat CIMBA_BRCA1_BCAC_TN_meta_summary_level_statistics.txt | tr -d '"' <  | \
-bcftools +munge --no-version -Ou -C colheaders.tsv -f human_g1k_v37.fasta -s BC | \
+zcat CIMBA_BRCA1_BCAC_TN_meta_summary_level_statistics.txt.gz | tr -d '"' <  | \
+bcftools +munge --no-version -Ou -C colheaders.tsv -f human_g1k_v37.fasta -s BC_2020 | \
 bcftools +liftover --exclude 'FILTER="REF_MISMATCH"' --no-version -Ou -- -s human_g1k_v37.fasta \
   -f GCA_000001405.15_GRCh38_no_alt_analysis_set.fna -c hg19ToHg38.over.chain.gz | \
 bcftools sort -o CIMBA_BRCA1_BCAC_TN_meta_summary_level_statistics.bcf -Ob --write-index
@@ -806,4 +982,65 @@ bcftools +pgs \
   --output-type b \
   --log ENIGMA3_mixed_se_wo_Mean_Full_Thickness_20190429.hg38.pgs.b4e-8.log \
   --write-index
+```
+
+Epigenetic Age Acceleration
+---------------------------
+
+Download [epigenetic age acceleration summary statistics](http://doi.org/10.7488/ds/2631) from [2019 epigenetic age](http://doi.org/10.1371/journal.pgen.1008104) study
+
+```
+for pfx in {E,I}EAA; do
+  wget -O- http://datashare.ed.ac.uk/bitstream/handle/10283/3427/${pfx}_metaPlusGS.csv | gzip > ${pfx}_metaPlusGS.csv.gz
+ 
+  zcat ${pfx}_metaPlusGS.csv.gz | sed 's/,meta_\?/,/g' | \
+  bcftools +munge --no-version -Ou -C colheaders.tsv -f human_g1k_v37.fasta -s ${pfx}_2019 --ns 13493 | \
+  bcftools +liftover --exclude 'FILTER="REF_MISMATCH"' --no-version -Ou -- -s human_g1k_v37.fasta \
+    -f GCA_000001405.15_GRCh38_no_alt_analysis_set.fna -c hg19ToHg38.over.chain.gz | \
+  bcftools sort -o ${pfx}_metaPlusGS.hg38.bcf -Ob --write-index
+
+  bcftools +pgs \
+    --no-version \
+    --beta-cov 1e-7 \
+    --max-alpha-hat2 0.005 \
+    ${pfx}_metaPlusGS.hg38.bcf \
+    1kg_ldgm.EUR.bcf \
+    --output ${pfx}_metaPlusGS.hg38.pgs.b1e-7.bcf \
+    --output-type b \
+    --log ${pfx}_metaPlusGS.hg38.pgs.b1e-7.log \
+    --write-index
+done
+```
+
+DNA methylation biomarkers of aging
+-----------------------------------
+
+Download [DNA methylation biomarkers of aging summary statistics](http://doi.org/10.7488/ds/2834) from [2021 aging](http://doi.org/10.1186/s13059-021-02398-9) study
+
+```
+for pfx in Gran PAI1 PhenoAge GrimAge IEAA Hannum; do
+  for anc in AFR EUR; do
+    wget -O- http://datashare.ed.ac.uk/bitstream/handle/10283/3645/${pfx}_${anc}_summary_statistics.txt | gzip > ${pfx}_${anc}_summary_statistics.txt.gz
+
+    zcat ${pfx}_${anc}_summary_statistics.txt.gz | awk -F"\t" '$3!="ID"' | \
+      bcftools +munge --no-version -Ou -C colheaders.tsv -f human_g1k_v37.fasta -s ${pfx}_2021.$anc | \
+      bcftools +liftover --exclude 'FILTER="REF_MISMATCH"' --no-version -Ou -- -s human_g1k_v37.fasta \
+        -f GCA_000001405.15_GRCh38_no_alt_analysis_set.fna -c hg19ToHg38.over.chain.gz | \
+      bcftools sort -o ${pfx}_$anc.hg38.bcf -Ob --write-index
+  done
+  bcftools merge --no-version -m none -o $pfx.hg38.bcf -Ob ${pfx}_{AFR,EUR}.hg38.bcf --write-index
+  /bin/rm ${pfx}_{AFR,EUR}.hg38.bcf{,.csi}
+
+  bcftools +pgs \
+    --no-version \
+    --beta-cov 5e-8 \
+    --max-alpha-hat2 0.005 \
+    $pfx.hg38.bcf \
+    1kg_ldgm.AFR.bcf \
+    1kg_ldgm.EUR.bcf \
+    --output $pfx.hg38.pgs.b5e-8.bcf \
+    --output-type b \
+    --log $pfx.hg38.pgs.b5e-8.log \
+    --write-index
+done
 ```

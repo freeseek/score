@@ -35,7 +35,7 @@
 #include "bcftools.h"
 #include "score.h"
 
-#define MUNGE_VERSION "2025-08-19"
+#define MUNGE_VERSION "2025-12-02"
 
 #define IFFY_TAG "IFFY"
 #define MISMATCH_TAG "REF_MISMATCH"
@@ -374,6 +374,7 @@ int run(int argc, char **argv) {
     if (str.s[0] == '#') {
         memmove(str.s, str.s + 1, str.l - 1);
         str.l--;
+        str.s[str.l] = '\0';
     }
 
     // remove _[0-9]*$ from the header to make sure FRQ_U is recognized
@@ -536,6 +537,7 @@ int run(int argc, char **argv) {
         if (ns) output[NS] = 1;
         if (nc) output[NC] = 1;
         if (output[NC] && output_nco) output[NS] = 1;
+        if (ne) output[NE] = 1;
     }
     if (!chr) error("Could not find chromosome column in input file\n");
     if (!pos) error("Could not find position column in input file\n");

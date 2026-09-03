@@ -991,17 +991,17 @@ One of the advantages of the [GWAS-VCF specification](http://github.com/MRCIEU/g
 
 To obtain a `gff3_file` the following code can be used
 ```
-wget -O- ftp://ftp.ensembl.org/pub/current_gff3/homo_sapiens/Homo_sapiens.GRCh38.111.gff3.gz | gunzip | \
+wget -O- ftp://ftp.ensembl.org/pub/current_gff3/homo_sapiens/Homo_sapiens.GRCh38.115.gff3.gz | gunzip | \
   sed -e 's/^##sequence-region   \([0-9XY]\)/##sequence-region   chr\1/' \
   -e 's/^##sequence-region   MT/##sequence-region   chrM/' \
-  -e 's/^\([0-9XY]\)/chr\1/' -e 's/^MT/chrM/' | gzip > $HOME/GRCh38/Homo_sapiens.GRCh38.111.gff3.gz
+  -e 's/^\([0-9XY]\)/chr\1/' -e 's/^MT/chrM/' | gzip > $HOME/GRCh38/Homo_sapiens.GRCh38.115.gff3.gz
 ```
 
 If you want to annotate the coding variants, you can do so with a simple command
 ```
 bcftools csq -o ieu-a-298.hg38.csq.bcf -Ob \
   -f $HOME/GRCh38/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna \
-  -g $HOME/GRCh38/Homo_sapiens.GRCh38.111.gff3.gz \
+  -g $HOME/GRCh38/Homo_sapiens.GRCh38.115.gff3.gz \
   -B 1 -c CSQ -l -n 64 -s - ieu-a-298.hg38.bcf \
   --write-index
 ```
@@ -1052,7 +1052,7 @@ If you generate an annotated version of the summary statistics
 bcftools csq \
   -o GIANT_HEIGHT_YENGO_2022_GWAS_SUMMARY_STATS_ALL.hg38.csq.bcf -Ob \
   -f $HOME/GRCh38/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna \
-  -g $HOME/GRCh38/Homo_sapiens.GRCh38.111.gff3.gz -B 1 -c CSQ -l -n 64 -s - \
+  -g $HOME/GRCh38/Homo_sapiens.GRCh38.115.gff3.gz -B 1 -c CSQ -l -n 64 -s - \
   GIANT_HEIGHT_YENGO_2022_GWAS_SUMMARY_STATS_ALL.hg38.bcf \
   --write-index
 ```

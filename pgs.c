@@ -37,7 +37,7 @@
 #include "filter.h"
 #include "cholmod.h"
 
-#define PGS_VERSION "2025-08-19"
+#define PGS_VERSION "2025-11-04"
 
 #define AVERAGE_LD_SCORE_DFLT 72.6
 #define EXPECTED_RATIO_DFLT 0.6
@@ -2062,11 +2062,6 @@ int run(int argc, char **argv) {
         for (pop = 0; pop < n_files; pop++) free(filenames[pop]);
         free(filenames);
     }
-
-    fprintf(log_file, "PGS " PGS_VERSION " http://github.com/freeseek/score BCFtools %s HTSlib %s\n",
-            bcftools_version(), hts_version());
-    fprintf(log_file, "CHOLMOD %d.%d.%d SuiteSparse %d.%d.%d compiled for %s\n", cholmod_ver[0], cholmod_ver[1],
-            cholmod_ver[2], suitesparse_ver[0], suitesparse_ver[1], suitesparse_ver[2], blas_library);
 
     if (!stats_only) {
         int beta_cov_warning = isnan(beta_cov);
